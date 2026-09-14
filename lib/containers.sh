@@ -229,11 +229,18 @@ containers_ensure_subid() {
         return 0
     fi
 
-    echo "  subuid/subgid: $status — allocating 100000-165535"
-    if ! sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 "${USER:-$(id -un)}"; then
+    # Allocate the next free block above the highest range already assigned,
+    # instead of the hardcoded 100000-165535 which can collide with an existing
+    # user's allocation on shared hosts.
+    local base
+    base="$(awk -F: '$2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ { end = $2 + $3; if (end > max) max = end } END { print (max > 0) ? max : 100000 }' /etc/subuid /etc/subgid 2>/dev/null)"
+    [[ "$base" =~ ^[0-9]+$ ]] || base=100000
+    local last=$((base + CONTAINERS_MIN_SUBID - 1))
+    echo "  subuid/subgid: $status — allocating $base-$last"
+    if ! sudo usermod --add-subuids "$base-$last" --add-subgids "$base-$last" "${USER:-$(id -un)}"; then
         echo "Error: could not allocate subordinate UID/GID ranges." >&2
         echo "       Rootless containers require them. Allocate manually, e.g.:" >&2
-        echo "         sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER" >&2
+        echo "         sudo usermod --add-subuids $base-$last --add-subgids $base-$last $USER" >&2
         return 1
     fi
     echo "  subuid/subgid: allocated"

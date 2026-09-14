@@ -30,6 +30,51 @@ BOLD="${BOLD:-\033[1m}"
 DIM="${DIM:-\033[2m}"
 NC="${NC:-\033[0m}"
 
+# _security_perm_writeable - True when the mode's group/other digits grant write.
+# sshd StrictModes rejects any key material reachable through such a path.
+_security_perm_writeable() {
+    local perm="$1"
+    [[ -n "$perm" ]] || return 1
+    local last_two="${perm: -2}"
+    [[ "$last_two" =~ [2367] ]]
+}
+
+# _security_mode_of - Print numeric mode of a path (GNU and BSD stat).
+_security_mode_of() {
+    stat -c "%a" "$1" 2>/dev/null || stat -f "%Lp" "$1" 2>/dev/null || true
+}
+
+# _security_owner_of - Print owner name of a path (GNU and BSD stat).
+_security_owner_of() {
+    stat -c "%U" "$1" 2>/dev/null || stat -f "%Su" "$1" 2>/dev/null || true
+}
+
+# _security_user_in_list - Match a user against an sshd user-pattern list
+# ("user" or "user@host" entries; * and ? globs apply like sshd's own matcher).
+_security_user_in_list() {
+    local user="$1" list="$2" tok upat
+    for tok in $list; do
+        upat="${tok%%@*}"
+        # Intentional glob: sshd user patterns allow * and ? wildcards.
+        # shellcheck disable=SC2053
+        [[ "$user" == $upat ]] && return 0
+    done
+    return 1
+}
+
+# _security_group_in_list - True when any of the user's groups appears in list.
+_security_group_in_list() {
+    local groups="$1" list="$2" tok g
+    for tok in $list; do
+        for g in $groups; do
+            # Intentional glob: sshd group patterns allow * and ? wildcards.
+            # shellcheck disable=SC2053
+            [[ "$g" == $tok ]] && return 0
+        done
+    done
+    return 1
+}
+
 # security_verify_admin_user - Check if a non-root admin user is valid for login
 # Arguments: username
 # Returns: 0 if valid and has sudo + key, 1 otherwise
@@ -70,8 +115,19 @@ security_verify_admin_user() {
         return 1
     fi
 
-    # 4. User has authorized_keys with at least one valid key
-    local home_dir="" auth_keys ssh_dir
+    # Group membership alone does not prove sudo works. When we are root we
+    # can ask sudo itself; a wheel member on a box whose sudoers grants wheel
+    # nothing would pass the group check and still be unable to elevate.
+    if [[ "$(id -u 2>/dev/null || true)" == "0" ]] && command -v sudo >/dev/null 2>&1; then
+        if ! sudo -n -l -U "$user" >/dev/null 2>&1; then
+            return 1
+        fi
+    fi
+
+    # 4. Resolve the authorized-keys file sshd actually reads. The default is
+    # ~/.ssh/authorized_keys, but AuthorizedKeysFile may relocate it (%u, %h
+    # and %% tokens expand the same way sshd expands them).
+    local home_dir="" ssh_dir
     if command -v getent >/dev/null 2>&1; then
         home_dir="$(getent passwd "$user" 2>/dev/null | cut -d: -f6 || true)"
     fi
@@ -81,23 +137,48 @@ security_verify_admin_user() {
     if [[ -z "$home_dir" && -f /etc/passwd ]]; then
         home_dir="$(awk -F: -v user="$user" '$1 == user { print $6; exit }' /etc/passwd 2>/dev/null || true)"
     fi
-    [[ -n "$home_dir" ]] || return 1
+    [[ -n "$home_dir" && -d "$home_dir" ]] || return 1
     ssh_dir="$home_dir/.ssh"
-    auth_keys="$ssh_dir/authorized_keys"
 
-    if [[ ! -d "$ssh_dir" || ! -f "$auth_keys" || ! -s "$auth_keys" ]]; then
-        return 1
-    fi
+    local auth_keys="" akf_list tok expanded
+    akf_list="$(security_get_sshd_param AuthorizedKeysFile "")"
+    [[ -z "$akf_list" ]] && akf_list=".ssh/authorized_keys .ssh/authorized_keys2"
+    for tok in $akf_list; do
+        expanded="${tok//%%/$'\001'}"
+        expanded="${expanded//%u/$user}"
+        expanded="${expanded//%h/$home_dir}"
+        expanded="${expanded//$'\001'/%}"
+        [[ "$expanded" != /* ]] && expanded="$home_dir/$expanded"
+        if [[ -f "$expanded" && -s "$expanded" ]]; then
+            auth_keys="$expanded"
+            break
+        fi
+    done
+    [[ -n "$auth_keys" ]] || return 1
 
-    # 5. Check permissions for sshd StrictModes (directory <= 700, authorized_keys <= 644)
+    # 5. StrictModes checks: the home dir, ~/.ssh (when in use) and the keys
+    # file itself must not be writable by group/other, and the keys file must
+    # be owned by the user (or root).
     if command -v stat >/dev/null 2>&1; then
-        local ssh_perm
-        ssh_perm="$(stat -c "%a" "$ssh_dir" 2>/dev/null || stat -f "%Lp" "$ssh_dir" 2>/dev/null || true)"
-        if [[ -n "$ssh_perm" ]]; then
-            local last_two="${ssh_perm: -2}"
-            if [[ "$last_two" =~ [2367] ]]; then
+        local perm
+        perm="$(_security_mode_of "$home_dir")"
+        if _security_perm_writeable "$perm"; then
+            return 1
+        fi
+        if [[ -d "$ssh_dir" ]]; then
+            perm="$(_security_mode_of "$ssh_dir")"
+            if _security_perm_writeable "$perm"; then
                 return 1
             fi
+        fi
+        perm="$(_security_mode_of "$auth_keys")"
+        if _security_perm_writeable "$perm"; then
+            return 1
+        fi
+        local owner
+        owner="$(_security_owner_of "$auth_keys")"
+        if [[ -n "$owner" && "$owner" != "$user" && "$owner" != "root" ]]; then
+            return 1
         fi
     fi
 
@@ -112,6 +193,40 @@ security_verify_admin_user() {
     pubkey_cfg="$(printf '%s' "$pubkey_cfg" | tr '[:upper:]' '[:lower:]')"
     if [[ "$pubkey_cfg" != "yes" ]]; then
         return 1
+    fi
+
+    # 7. Allow/Deny user and group lists must not exclude the admin account.
+    # These come from sshd -T, so unset directives simply yield empty strings.
+    local allowusers denyusers allowgroups denygroups
+    allowusers="$(security_get_sshd_param AllowUsers "")"
+    denyusers="$(security_get_sshd_param DenyUsers "")"
+    allowgroups="$(security_get_sshd_param AllowGroups "")"
+    denygroups="$(security_get_sshd_param DenyGroups "")"
+    if [[ -n "$denyusers" ]] && _security_user_in_list "$user" "$denyusers"; then
+        return 1
+    fi
+    if [[ -n "$allowusers" ]] && ! _security_user_in_list "$user" "$allowusers"; then
+        return 1
+    fi
+    if [[ -n "$denygroups" ]] && _security_group_in_list "$user_groups" "$denygroups"; then
+        return 1
+    fi
+    if [[ -n "$allowgroups" ]] && ! _security_group_in_list "$user_groups" "$allowgroups"; then
+        return 1
+    fi
+
+    # 8. A locked account ('!' shadow prefix) only blocks pubkey login when
+    # sshd is not delegating account checks to PAM (UsePAM no).
+    if command -v getent >/dev/null 2>&1; then
+        local shadow_pw usepam
+        shadow_pw="$(getent shadow "$user" 2>/dev/null | cut -d: -f2 || true)"
+        if [[ "$shadow_pw" == '!'* ]]; then
+            usepam="$(security_get_sshd_param UsePAM "unknown")"
+            usepam="$(printf '%s' "$usepam" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$usepam" != "yes" ]]; then
+                return 1
+            fi
+        fi
     fi
 
     return 0
@@ -144,6 +259,11 @@ security_test_sshd_config() {
     local config_file="${1:-}"
     local -a args=()
     [[ -n "$config_file" ]] && args=(-f "$config_file")
+    # Debian-family sshd -t fails outright without the privilege-separation
+    # directory, which does not exist on minimal/container installs.
+    if [[ "$(uname -s 2>/dev/null)" == "Linux" && ! -d /run/sshd ]]; then
+        sudo mkdir -p /run/sshd 2>/dev/null || true
+    fi
     if command -v sshd >/dev/null 2>&1; then
         sudo sshd -t "${args[@]}" 2>/dev/null
         return $?
@@ -177,11 +297,35 @@ security_render_sshd_config() {
                 normalized = tolower($0)
                 sub(/^[[:space:]]*/, "", normalized)
                 if (normalized ~ /^match[[:space:]]/) in_match = 1
+                # The managed-block marker is a real comment; dedup it by its
+                # text before classifying comment-vs-disabled-directive.
+                bare = normalized
+                sub(/^#[[:space:]]*/, "", bare)
+                if (!in_match && bare == "rig security baseline") {
+                    # The managed block ends with one separator blank line;
+                    # remember to drop that too so re-rendering stays stable.
+                    pending_blank = 1
+                    next
+                }
                 check = normalized
-                sub(/^#[[:space:]]*/, "", check)
-                if (!in_match && check == "rig security baseline") next
+                if (substr(check, 1, 1) == "#") {
+                    if (substr(check, 2, 1) ~ /[a-z]/) {
+                        # Stock "#Port 22"-style disabled directive: dedup it
+                        # so the managed block above is the effective value.
+                        sub(/^#/, "", check)
+                    } else {
+                        # A real comment ("# Port ...", "# note"): never a
+                        # directive, always preserved.
+                        check = "__comment__"
+                    }
+                }
                 split(check, fields, /[[:space:]]+/)
                 if (!in_match && fields[1] ~ /^(permitrootlogin|passwordauthentication|pubkeyauthentication|kbdinteractiveauthentication|port)$/) next
+                if (pending_blank && normalized ~ /^[[:space:]]*$/) {
+                    pending_blank = 0
+                    next
+                }
+                pending_blank = 0
                 print
             }
         ' "$input"
@@ -280,8 +424,10 @@ security_audit_listening_ports() {
         [[ "$state" == "LISTEN" || "$proto" == "udp" ]] || continue
 
         local bind_ip port
-        if [[ "$local_addr" =~ \[?([0-9a-fA-F:\.]+)\]?:([0-9]+)$ ]]; then
+        # Accept bracketed IPv6 and %-zone suffixes (127.0.0.53%lo, fe80::1%eth0)
+        if [[ "$local_addr" =~ \[?([0-9a-fA-F:%\.A-Za-z]+)\]?:([0-9]+)$ ]]; then
             bind_ip="${BASH_REMATCH[1]}"
+            bind_ip="${bind_ip%%%*}"
             port="${BASH_REMATCH[2]}"
         else
             continue
@@ -295,9 +441,11 @@ security_audit_listening_ports() {
         # Determine Policy & Firewall Status
         local status_str is_internal=0 is_declared=0
 
-        if [[ "$bind_ip" == "127.0.0.1" || "$bind_ip" == "::1" || "$bind_ip" == "localhost" ]]; then
-            is_internal=1
-        fi
+        # Anything bound to loopback or a link-local address cannot be reached
+        # from the public network: all of 127.0.0.0/8, ::1, fe80::/10, 169.254/16.
+        case "$bind_ip" in
+            127.*|::1|localhost|fe80::*|169.254.*) is_internal=1 ;;
+        esac
 
         if [[ $is_internal -eq 1 ]]; then
             status_str="${GREEN}✔ Internal only${NC}"
@@ -335,8 +483,8 @@ security_audit_listening_ports() {
                         warnings+=("Port $port/$proto is declared in RIG_PUBLIC_${proto_label} but NOT found in active $fw_backend rules!")
                     fi
                 else
-                    status_str="${YELLOW}⚠ WARN: FW down${NC}"
-                    warnings+=("Port $port/$proto ($proc_name) exposed publicly while firewall ($fw_backend) is inactive!")
+                    status_str="${YELLOW}⚠ WARN: FW inactive?${NC}"
+                    warnings+=("Port $port/$proto ($proc_name) exposed publicly while firewall ($fw_backend) is inactive or unreadable!")
                 fi
             else
                 if [[ "$warn_undeclared" == "yes" ]]; then
@@ -352,7 +500,9 @@ security_audit_listening_ports() {
 
         printf "  %-5s %-7s %-16s %-16s %b\n" "$proto" "$port" "$bind_ip" "$proc_name" "$status_str"
 
-    done < <(sudo ss -lntup 2>/dev/null | tail -n +2 || true)
+    # `sudo -n` keeps this read-only audit from prompting for a password; the
+    # unprivileged fallback still lists sockets (process names stay "unknown").
+    done < <({ sudo -n ss -lntup 2>/dev/null || ss -lntu 2>/dev/null; } | tail -n +2 || true)
 
     if [[ ${#warnings[@]} -gt 0 ]]; then
         printf "\n  ${YELLOW}${BOLD}Security Warnings:${NC}\n"

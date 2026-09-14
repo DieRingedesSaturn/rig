@@ -59,7 +59,7 @@ Package names are resolved through `lib/pkg-maps.sh`, so the same abstract names
 
 | File | Action |
 |------|--------|
-| `~/.config/starship.toml` | Created only when absent; commented stub pointing at the upstream config reference |
+| `~/.config/starship.toml` | Created only when absent; default prompt shows path, git state, language runtimes and time — plus a red `ssh:<hostname>` prefix inside SSH sessions |
 | `~/.zshrc` | **Never touched** |
 | `/etc/passwd` | **Never touched** |
 

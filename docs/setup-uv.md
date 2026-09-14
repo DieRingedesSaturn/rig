@@ -36,6 +36,7 @@ uv works on all supported platforms (Linux and macOS). No OS-specific package ma
 | `~/.local/bin/uvx` | uvx (uv tool runner) |
 | `~/.local/share/uv/` | uv cache and data directory |
 | `~/.local/share/uv/python/` | Installed Python versions |
+| `~/.zshrc`, `~/.bashrc` | Appends `export PATH="$HOME/.local/bin:$PATH"` if not already present (needed for uv to work in new shells) |
 
 ## Environment Variables
 

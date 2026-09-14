@@ -142,7 +142,21 @@ rig_config_get() {
             }
             val = line
         }
-        END { print val }
+        END {
+            # Shell-style trailing comments: a quoted value ends at its closing
+            # quote; an unquoted value ends before the first " #". The single
+            # quote is built with %c because the program itself is wrapped in
+            # single quotes by the shell.
+            sq = sprintf("%c", 39)
+            if (substr(val, 1, 1) == "\"") {
+                val = substr(val, 2); sub(/".*$/, "", val)
+            } else if (substr(val, 1, 1) == sq) {
+                val = substr(val, 2); sub(sq ".*$", "", val)
+            } else {
+                sub(/[[:space:]]+#.*$/, "", val); sub(/[[:space:]]+$/, "", val)
+            }
+            print val
+        }
     ' "$file" 2>/dev/null || true)"
 
     # Strip one layer of surrounding quotes and trailing whitespace.

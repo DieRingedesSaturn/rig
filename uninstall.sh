@@ -191,34 +191,6 @@ backup_file() {
     echo "  Backup: $backup"
 }
 
-# Remove lines matching pattern from .bashrc and .zshrc
-remove_rc_line() {
-    local pattern="$1"
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-        [[ -f "$rc" ]] || continue
-        grep -qF "$pattern" "$rc" || continue
-        backup_file "$rc"
-        local tmp="${rc}.tmp.$$"
-        grep -vF "$pattern" "$rc" > "$tmp" || true
-        [[ -s "$tmp" ]] && mv "$tmp" "$rc" || rm -f "$tmp"
-    done
-}
-
-# Remove a block between "# MARKER START" and "# MARKER END" from rc files
-remove_rc_block() {
-    local marker="$1"
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-        [[ -f "$rc" ]] || continue
-        grep -q "# ${marker} START" "$rc" || continue
-        backup_file "$rc"
-        if is_macos; then
-            sed -i '' "/# ${marker} START/,/# ${marker} END/d" "$rc"
-        else
-            sed -i "/# ${marker} START/,/# ${marker} END/d" "$rc"
-        fi
-    done
-}
-
 load_env() {
     if [[ -d "$HOME/.nvm" ]]; then
         export NVM_DIR="$HOME/.nvm"
@@ -637,6 +609,15 @@ uninstall_containers() {
 uninstall_tailscale() {
     echo "=== Uninstalling Tailscale ==="
 
+    # When SSH is restricted to tailscale0 the firewall rules survive this
+    # uninstall — warn early that removing Tailscale could strand remote SSH.
+    if [[ "$(rig_config_get RIG_SSH_ACCESS '' 2>/dev/null || true)" == "tailscale" ]]; then
+        echo "  WARNING: SSH access is restricted to tailscale0 (RIG_SSH_ACCESS=tailscale)."
+        echo "           Removing Tailscale may make this host unreachable over SSH."
+        echo "           Re-run the security component with RIG_SSH_ACCESS=public first,"
+        echo "           or remove the tailscale0 firewall rules manually."
+    fi
+
     if is_macos; then
         # macOS: Tailscale is a cask or App Store app; CLI disconnect only
         tailscale logout 2>/dev/null || true
@@ -707,7 +688,8 @@ uninstall_ssh() {
         echo "  GitHub SSH proxy config removed."
     fi
 
-    # Restore sshd_config from backup
+    # Restore sshd_config from backup — but only if it passes sshd -t, since
+    # restoring a broken file and restarting would take sshd down.
     local latest_backup=""
     latest_backup="$(rig_system_latest_backup /etc/ssh/sshd_config setup-ssh || true)"
     for f in /etc/ssh/sshd_config.bak.*; do
@@ -715,9 +697,18 @@ uninstall_ssh() {
     done
     if [[ -n "$latest_backup" ]]; then
         rig_system_backup /etc/ssh/sshd_config uninstall >/dev/null 2>&1 || true
-        sudo cp "$latest_backup" /etc/ssh/sshd_config
-        sudo systemctl restart ssh 2>/dev/null || sudo systemctl restart sshd 2>/dev/null || true
-        echo "  sshd_config restored from backup."
+        local sshd_bin=""
+        if command -v sshd >/dev/null 2>&1; then sshd_bin="sshd"
+        elif [[ -x /usr/sbin/sshd ]]; then sshd_bin="/usr/sbin/sshd"; fi
+        # sshd -t needs the privilege-separation dir on Debian-family systems.
+        [[ -d /run/sshd ]] || sudo mkdir -p /run/sshd 2>/dev/null || true
+        if [[ -n "$sshd_bin" ]] && ! sudo "$sshd_bin" -t -f "$latest_backup" 2>/dev/null; then
+            echo "  WARNING: backup $latest_backup failed 'sshd -t'; leaving current sshd_config." >&2
+        else
+            sudo cp "$latest_backup" /etc/ssh/sshd_config
+            sudo systemctl restart ssh 2>/dev/null || sudo systemctl restart sshd 2>/dev/null || true
+            echo "  sshd_config restored from backup."
+        fi
     fi
 }
 

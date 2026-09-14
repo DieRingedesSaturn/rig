@@ -25,6 +25,8 @@ source "$SCRIPT_DIR/lib/pkg-maps.sh"
 source "$SCRIPT_DIR/lib/pkg-manager.sh"
 # shellcheck source=lib/backup.sh
 source "$SCRIPT_DIR/lib/backup.sh"
+# shellcheck source=lib/security.sh
+source "$SCRIPT_DIR/lib/security.sh"
 
 SSH_PORT="${SSH_PORT:-}"
 SSH_PUBKEY="${SSH_PUBKEY:-}"
@@ -45,12 +47,12 @@ fi
 SSHD_CONFIG="/etc/ssh/sshd_config"
 CHANGED=0
 SSHD_BACKUP_CREATED=0
+SSHD_BACKUP_PATH=""
 
 backup_sshd_config() {
-    local backup
     [[ "$SSHD_BACKUP_CREATED" -eq 0 ]] || return 0
-    backup="$(rig_system_backup "$SSHD_CONFIG" setup-ssh)"
-    echo "  Backup: $backup"
+    SSHD_BACKUP_PATH="$(rig_system_backup "$SSHD_CONFIG" setup-ssh)"
+    echo "  Backup: $SSHD_BACKUP_PATH"
     SSHD_BACKUP_CREATED=1
 }
 
@@ -86,12 +88,69 @@ sshd_ctl() {
         elif command -v service &>/dev/null; then
             sudo service "$svc" "$action"
         else
-            if [[ "$action" == "restart" ]]; then
-                pkill sshd 2>/dev/null || true
-            fi
-            sudo /usr/sbin/sshd
+            # No init system (containers, minimal images). Never `pkill sshd`
+            # here: this script may be running inside the SSH session it would
+            # kill. SIGHUP re-execs sshd and reloads its config while keeping
+            # existing connections alive.
+            case "$action" in
+                start)
+                    pgrep -x sshd &>/dev/null || sudo /usr/sbin/sshd
+                    ;;
+                restart|reload)
+                    if pgrep -x sshd &>/dev/null; then
+                        sudo pkill -HUP -x sshd 2>/dev/null || true
+                    else
+                        sudo /usr/sbin/sshd
+                    fi
+                    ;;
+            esac
         fi
     fi
+}
+
+# Apply "Key value" directives to the *global* section of sshd_config through a
+# preflighted candidate file. Directives are emitted before any Match block, so
+# they can never land in match context, and every duplicate in the global
+# section is removed (first value wins). The result is checked with sshd -t
+# before it is installed; a failed check leaves the live config untouched.
+_sshd_apply_directives() {
+    local candidate keyline key keys_re=""
+    candidate="$(mktemp)"
+    for keyline in "$@"; do
+        key="${keyline%% *}"
+        keys_re="${keys_re}${keys_re:+|}$(printf '%s' "$key" | tr '[:upper:]' '[:lower:]')"
+    done
+    {
+        for keyline in "$@"; do
+            printf '%s\n' "$keyline"
+        done
+        awk -v keys_re="$keys_re" '
+            BEGIN { in_match = 0 }
+            {
+                norm = tolower($0)
+                sub(/^[[:space:]]*/, "", norm)
+                if (norm ~ /^match[[:space:]]/) in_match = 1
+                check = norm
+                if (substr(check, 1, 1) == "#") {
+                    if (substr(check, 2, 1) ~ /[a-z]/) sub(/^#/, "", check)
+                    else check = "__comment__"
+                }
+                split(check, f, /[[:space:]]+/)
+                if (!in_match && keys_re != "" && f[1] ~ ("^(" keys_re ")$")) next
+                print
+            }
+        ' "$SSHD_CONFIG"
+    } > "$candidate"
+
+    if ! security_test_sshd_config "$candidate"; then
+        rm -f "$candidate"
+        echo "  ERROR: resulting sshd_config failed 'sshd -t'; existing config kept." >&2
+        return 1
+    fi
+    backup_sshd_config
+    sudo cp "$candidate" "$SSHD_CONFIG"
+    rm -f "$candidate"
+    CHANGED=1
 }
 
 echo "=== SSH Setup ==="
@@ -148,30 +207,13 @@ fi
 # [3/6] Configure port
 echo "[3/6] Configuring port..."
 if [ -n "$SSH_PORT" ]; then
-    if is_macos; then
-        echo "  macOS: sshd_config port changes require modifying /etc/ssh/sshd_config manually"
-        echo "  and reloading via launchctl. Attempting configuration..."
-        # macOS does have /etc/ssh/sshd_config, but changes require launchctl reload
-        if [ -f "$SSHD_CONFIG" ]; then
-            if grep -qE "^\s*Port\s+${SSH_PORT}\b" "$SSHD_CONFIG"; then
-                echo "  Port already set to $SSH_PORT."
-            else
-                backup_sshd_config
-                sudo sed -i'' -e '/^\s*#\{0,1\}\s*Port\s/d' "$SSHD_CONFIG"
-                echo "Port $SSH_PORT" | sudo tee -a "$SSHD_CONFIG" >/dev/null
-                echo "  Port set to $SSH_PORT."
-                CHANGED=1
-            fi
-        fi
+    if [ ! -f "$SSHD_CONFIG" ]; then
+        echo "  $SSHD_CONFIG not found, skipping port change."
+    elif [[ "$(security_get_sshd_param Port "")" == "$SSH_PORT" ]]; then
+        echo "  Port already set to $SSH_PORT."
     else
-        if grep -qE "^\s*Port\s+${SSH_PORT}\b" "$SSHD_CONFIG"; then
-            echo "  Port already set to $SSH_PORT."
-        else
-            backup_sshd_config
-            sudo sed -i '/^\s*#\?\s*Port\s/d' "$SSHD_CONFIG"
-            echo "Port $SSH_PORT" | sudo tee -a "$SSHD_CONFIG" >/dev/null
+        if _sshd_apply_directives "Port $SSH_PORT"; then
             echo "  Port set to $SSH_PORT."
-            CHANGED=1
         fi
     fi
 else
@@ -201,17 +243,15 @@ fi
 echo "[5/6] Ensuring public key authentication is enabled..."
 if [ -n "$SSH_PUBKEY" ]; then
     if [ -f "$SSHD_CONFIG" ]; then
-        if ! grep -qE '^\s*PubkeyAuthentication\s+yes' "$SSHD_CONFIG" 2>/dev/null; then
-            [ "$CHANGED" -eq 0 ] && backup_sshd_config
-            if is_macos; then
-                sudo sed -i'' -e '/^\s*#\{0,1\}\s*PubkeyAuthentication\s/d' "$SSHD_CONFIG"
-            else
-                sudo sed -i '/^\s*#\?\s*PubkeyAuthentication\s/d' "$SSHD_CONFIG"
-            fi
-            echo "PubkeyAuthentication yes" | sudo tee -a "$SSHD_CONFIG" >/dev/null
-            CHANGED=1
+        cur_pubkey="$(security_get_sshd_param PubkeyAuthentication "")"
+        cur_pubkey="$(printf '%s' "$cur_pubkey" | tr '[:upper:]' '[:lower:]')"
+        if [[ "$cur_pubkey" == "yes" ]]; then
+            echo "  Public key authentication already enabled."
+        elif _sshd_apply_directives "PubkeyAuthentication yes"; then
+            echo "  Public key authentication enabled."
+        else
+            echo "  WARNING: could not enable PubkeyAuthentication; existing config kept." >&2
         fi
-        echo "  Public key authentication enabled."
         echo "  (Note: Root login and password authentication hardening are safely managed by the security module)"
     fi
 else
@@ -250,12 +290,21 @@ else
     echo "  Skipped (SSH_PROXY_PORT not set)."
 fi
 
-# Restart sshd if config changed
+# Restart sshd if config changed; roll back if the service fails to come up.
 if [ "$CHANGED" -eq 1 ]; then
     echo ""
     echo "Restarting sshd..."
-    sshd_ctl restart
-    echo "  sshd restarted."
+    if sshd_ctl restart; then
+        echo "  sshd restarted."
+    else
+        echo "  ERROR: sshd failed to restart; restoring previous configuration." >&2
+        if [[ -n "$SSHD_BACKUP_PATH" ]]; then
+            sudo cp "$SSHD_BACKUP_PATH" "$SSHD_CONFIG" 2>/dev/null || true
+            sshd_ctl restart || true
+            echo "  Restored $SSHD_CONFIG from backup." >&2
+        fi
+        exit 1
+    fi
 fi
 
 echo ""

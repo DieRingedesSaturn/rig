@@ -28,21 +28,28 @@ BASE_URL="https://${_RAW}/${REPO}/${BRANCH}"
 
 export GH_PROXY="${GH_PROXY:-}"
 
+# GH_PROXY routes every downloaded script through a third party; only HTTPS is
+# acceptable, and the check must run before the first fetch in _load_lib.
+if [[ -n "$GH_PROXY" && "$GH_PROXY" != https://* ]]; then
+    echo "error: GH_PROXY must use https:// (got: $GH_PROXY)" >&2
+    exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+
 # --- [A.1] OS / Package-Manager Libraries -----------------------------------
 
 _load_lib() {
     local name="$1"
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
-    if [[ -f "${script_dir}/lib/${name}" ]]; then
+    if [[ -f "${SCRIPT_DIR}/lib/${name}" ]]; then
         # Local clone: source directly
         # shellcheck disable=SC1090
-        source "${script_dir}/lib/${name}"
+        source "${SCRIPT_DIR}/lib/${name}"
     else
         # Remote (curl | bash): fetch from repo
         local url="${BASE_URL}/lib/${name}"
-        [[ -n "${GH_PROXY:-}" ]] && url="${GH_PROXY}/${url}"
+        [[ -n "${GH_PROXY:-}" ]] && url="${GH_PROXY%/}/${url}"
         local body
         body="$(curl -fsSL "$url")" || { echo "Failed to fetch lib/${name}" >&2; return 1; }
         eval "$body"
@@ -73,13 +80,10 @@ setup_colors() {
         RED='\033[0;31m'
         GREEN='\033[0;32m'
         YELLOW='\033[0;33m'
-        BLUE='\033[0;34m'
-        MAGENTA='\033[0;35m'
         CYAN='\033[0;36m'
         WHITE='\033[1;37m'
         BOLD='\033[1m'
         DIM='\033[2m'
-        ITALIC='\033[3m'
         NC='\033[0m'
         HIDE_CURSOR='\033[?25l'
         SHOW_CURSOR='\033[?25h'
@@ -93,8 +97,8 @@ setup_colors() {
         SYM_WARN="${YELLOW}▲${NC}"
         SYM_PLAY="${CYAN}▶${NC}"
     else
-        RED='' GREEN='' YELLOW='' BLUE='' MAGENTA='' CYAN='' WHITE=''
-        BOLD='' DIM='' ITALIC='' NC=''
+        RED='' GREEN='' YELLOW='' CYAN='' WHITE=''
+        BOLD='' DIM='' NC=''
         HIDE_CURSOR='' SHOW_CURSOR='' CLEAR_LINE=''
         SYM_CHECK='[ok]' SYM_CROSS='[fail]' SYM_ARROW='>' SYM_DOT='[ ]'
         SYM_FILL='[x]' SYM_WARN='[!]' SYM_PLAY='[>]'
@@ -133,8 +137,14 @@ COMP_DESCS=(
     "Firewall rules and SSH hardening policies"
 )
 
-# Whether component update needs sudo
-COMP_NEEDS_SUDO=(0 1 1 1 0 0 0 1 1 1 1)
+# Whether component update needs sudo (dynamically set based on OS).
+# Linux package updates all need sudo; on macOS Homebrew manages shell, tmux,
+# git, tools and neovim without it, and ssh is a no-op there.
+if is_macos; then
+    COMP_NEEDS_SUDO=(0 0 0 0 0 0 0 1 1 0 1)
+else
+    COMP_NEEDS_SUDO=(1 1 1 1 1 0 0 1 1 1 1)
+fi
 
 # Detection / selection / version state
 COMP_INSTALLED=(0 0 0 0 0 0 0 0 0 0 0)
@@ -455,10 +465,53 @@ update_neovim() {
     fi
 }
 
-update_security() {
-    if [[ -f "$SCRIPT_DIR/setup-security.sh" ]]; then
-        bash "$SCRIPT_DIR/setup-security.sh" --yes
+# Run a top-level repo script in both local-checkout and curl|bash modes.
+# Remote mode downloads the script plus its lib/ dependencies into a temp dir
+# so the script's own `source lib/...` resolution keeps working.
+_run_repo_script() {
+    local script="$1"
+    shift
+
+    if [[ -f "${SCRIPT_DIR}/${script}" && -f "${SCRIPT_DIR}/lib/os-detect.sh" ]]; then
+        bash "${SCRIPT_DIR}/${script}" "$@"
+        return $?
     fi
+
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "  curl is required to fetch ${script}" >&2
+        return 1
+    fi
+
+    local tmpdir lib_file url
+    tmpdir="$(mktemp -d)"
+    mkdir -p "$tmpdir/lib"
+    for lib_file in os-detect.sh pkg-maps.sh pkg-manager.sh rig-config.sh \
+                    containers.sh docker.sh podman.sh tools.sh firewall.sh \
+                    security.sh backup.sh; do
+        url="${BASE_URL}/lib/${lib_file}"
+        [[ -n "${GH_PROXY:-}" ]] && url="${GH_PROXY%/}/${url}"
+        if ! curl -fsSL "$url" -o "$tmpdir/lib/$lib_file" 2>/dev/null; then
+            rm -rf "$tmpdir"
+            echo "  Failed to fetch lib/${lib_file}" >&2
+            return 1
+        fi
+    done
+    url="${BASE_URL}/${script}"
+    [[ -n "${GH_PROXY:-}" ]] && url="${GH_PROXY%/}/${url}"
+    if ! curl -fsSL "$url" -o "$tmpdir/$script" 2>/dev/null; then
+        rm -rf "$tmpdir"
+        echo "  Failed to fetch ${script}" >&2
+        return 1
+    fi
+
+    bash "$tmpdir/$script" "$@"
+    local rc=$?
+    rm -rf "$tmpdir"
+    return $rc
+}
+
+update_security() {
+    _run_repo_script setup-security.sh --yes
 }
 
 update_ssh() {
@@ -815,6 +868,10 @@ parse_args() {
                     exit 1
                 fi
                 GH_PROXY="$2"
+                if [[ "$GH_PROXY" != https://* ]]; then
+                    echo "error: --gh-proxy must use https:// (got: $GH_PROXY)" >&2
+                    exit 1
+                fi
                 shift 2
                 ;;
             --verbose|-v)
@@ -857,7 +914,11 @@ main() {
         fi
     fi
 
-    LOG_FILE="/tmp/rig-update-$(date +%Y%m%d-%H%M%S)"
+    # Per-run log dir: mktemp -d gives a private 0700 directory, avoiding the
+    # predictable-name race that a fixed /tmp/rig-update-* prefix would have.
+    local log_dir
+    log_dir="$(mktemp -d "/tmp/rig-update-XXXXXXXX")"
+    LOG_FILE="$log_dir/update"
 
     # Banner
     print_banner

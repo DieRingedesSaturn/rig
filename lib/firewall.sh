@@ -85,7 +85,22 @@ firewall_ensure_installed() {
     esac
 }
 
-# firewall_is_active - Check if the firewall service is actively filtering
+# _firewall_ro_cmd - Run a read-only firewall query without ever prompting for
+# a password: try unprivileged first (firewall-cmd queries work over D-Bus),
+# then fall back to cached sudo credentials. An empty-but-successful answer is
+# treated as unusable and retried via sudo -n.
+_firewall_ro_cmd() {
+    local out
+    if out="$("$@" 2>/dev/null)" && [[ -n "$out" ]]; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    sudo -n "$@" 2>/dev/null
+}
+
+# firewall_is_active - Check if the firewall service is actively filtering.
+# Read-only callers (status, audits) use sudo -n so they never block on a
+# password prompt; an unreadable backend reports as inactive.
 firewall_is_active() {
     local backend="$1"
     case "$backend" in
@@ -93,13 +108,14 @@ firewall_is_active() {
             if ! command -v ufw >/dev/null 2>&1; then
                 return 1
             fi
-            sudo ufw status 2>/dev/null | grep -qi "Status: active"
+            # ufw status requires root; there is no unprivileged path.
+            sudo -n ufw status 2>/dev/null | grep -qi "Status: active"
             ;;
         firewalld)
             if ! command -v firewall-cmd >/dev/null 2>&1; then
                 return 1
             fi
-            sudo firewall-cmd --state 2>/dev/null | grep -qi "running"
+            _firewall_ro_cmd firewall-cmd --state | grep -qi "running"
             ;;
         *)
             return 1
@@ -129,6 +145,15 @@ firewall_set_defaults() {
             sudo firewall-cmd --set-default-zone=public >/dev/null || return 1
             if [[ "$default_in" == "deny" ]]; then
                 sudo firewall-cmd --permanent --zone=public --set-target=DROP >/dev/null || return 1
+                # A DROP target is silently bypassed by service entries shipped
+                # in the stock public zone (ssh, cockpit, ...). Strip them so
+                # only explicitly declared ports stay reachable. dhcpv6-client
+                # is kept: removing it breaks DHCPv6 on networks that need it.
+                local svc
+                for svc in $(sudo firewall-cmd --permanent --zone=public --list-services 2>/dev/null); do
+                    [[ "$svc" == "dhcpv6-client" ]] && continue
+                    sudo firewall-cmd --permanent --zone=public --remove-service="$svc" >/dev/null || true
+                done
             else
                 sudo firewall-cmd --permanent --zone=public --set-target=default >/dev/null || return 1
             fi
@@ -254,18 +279,27 @@ firewall_list_allowed() {
                         allowed+=("$port_proto")
                     fi
                 fi
-            done < <(sudo ufw status 2>/dev/null | grep -E "ALLOW" || true)
+            done < <(sudo -n ufw status 2>/dev/null | grep -E "ALLOW" || true)
             ;;
         firewalld)
             local raw_ports
-            raw_ports="$(sudo firewall-cmd --list-ports 2>/dev/null || true)"
+            raw_ports="$(_firewall_ro_cmd firewall-cmd --list-ports || true)"
             for p in $raw_ports; do
                 allowed+=("$p")
             done
+            # Service entries open ports too (stock "ssh" → 22/tcp); expand
+            # them so the audit sees what is actually reachable.
+            local svc svc_ports
+            for svc in $(_firewall_ro_cmd firewall-cmd --list-services || true); do
+                svc_ports="$(_firewall_ro_cmd firewall-cmd --service="$svc" --get-ports || true)"
+                for p in $svc_ports; do
+                    [[ "$p" =~ ^[0-9]+/(tcp|udp)$ ]] && allowed+=("$p")
+                done
+            done
             local tailscale_ports tailscale_ifaces
-            tailscale_ifaces="$(sudo firewall-cmd --zone=rig-tailscale --list-interfaces 2>/dev/null || true)"
+            tailscale_ifaces="$(_firewall_ro_cmd firewall-cmd --zone=rig-tailscale --list-interfaces || true)"
             if printf '%s\n' "$tailscale_ifaces" | tr ' ' '\n' | grep -qx 'tailscale0'; then
-                tailscale_ports="$(sudo firewall-cmd --zone=rig-tailscale --list-ports 2>/dev/null || true)"
+                tailscale_ports="$(_firewall_ro_cmd firewall-cmd --zone=rig-tailscale --list-ports || true)"
                 for p in $tailscale_ports; do
                     allowed+=("${p}@tailscale")
                 done

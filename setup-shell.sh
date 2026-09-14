@@ -29,7 +29,6 @@ source "$SCRIPT_DIR/lib/pkg-maps.sh"
 # shellcheck source=lib/pkg-manager.sh
 source "$SCRIPT_DIR/lib/pkg-manager.sh"
 
-STARSHIP_REF="https://starship.rs/config/"
 ZSHRC="$HOME/.zshrc"
 STARSHIP_TOML="$HOME/.config/starship.toml"
 MISSING_ZSHRC=()
@@ -159,12 +158,18 @@ echo "[4/5] Starship configuration..."
 if [[ -f "$STARSHIP_TOML" ]]; then
     echo "  keeping existing $STARSHIP_TOML (left untouched)"
 else
+    mkdir -p "$(dirname "$STARSHIP_TOML")"
     cat > "$STARSHIP_TOML" <<'EOF'
 # Starship configuration — reference: https://starship.rs/config/
 
 format = """
-$directory$git_branch$git_status$python$conda$nodejs$time
+$hostname$directory$git_branch$git_status$python$conda$nodejs$time
 $character"""
+
+[hostname]
+ssh_only = true
+format = "[ssh:$hostname]($style) "
+style = "bold red"
 
 [directory]
 truncation_length = 3

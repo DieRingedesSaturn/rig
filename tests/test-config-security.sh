@@ -82,9 +82,13 @@ FIREWALL_ALLOWED="$(
     source "$ROOT_DIR/lib/firewall.sh"
     firewall-cmd() { :; }
     sudo() {
+        # The read path now calls `sudo -n` (never prompts); strip the flag
+        # so the canned responses below still match the real command.
+        [[ "$1" == "-n" ]] && shift
         case "$*" in
             'firewall-cmd --state') echo running ;;
             'firewall-cmd --list-ports') echo 80/tcp ;;
+            'firewall-cmd --list-services') : ;;
             'firewall-cmd --zone=rig-tailscale --list-interfaces') echo tailscale0 ;;
             'firewall-cmd --zone=rig-tailscale --list-ports') echo 22/tcp ;;
         esac

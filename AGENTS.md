@@ -69,20 +69,20 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    S0[触发 Security 加固流程] --> S1[1. 检查/创建普通 Admin 用户]
-    S1 --> S2[2. 验证 Admin 用户 authorized_keys]
-    S2 --> S3{是否存在可用免密 Key?}
+    S0[触发 Security 加固流程] --> S1[1. 校验 Admin 用户\n非root/存在/未锁定/sudo组+sudo -l可用]
+    S1 --> S2[2. 验证 authorized_keys\n生效AuthorizedKeysFile/权限/AllowDeny列表]
+    S2 --> S3{校验全部通过?}
     S3 -- 否 --> S4[硬性拒绝禁用 Root / 密码登录\n输出告警并终止]
-    S3 -- 是 --> S5[3. 验证 Admin 用户 Sudo 提权]
-    S5 --> S6{Sudo 可用?}
+    S3 -- 是 --> S5[3. 渲染候选 sshd_config 并执行 sshd -t 预检]
+    S5 --> S6{预检通过?}
     S6 -- 否 --> S4
-    S6 -- 是 --> S7[4. 配置防火墙放行 SSH 端口]
-    S7 --> S8[5. 预配置 sshd_config]
-    S8 --> S9[6. 执行 sshd -t 语法预检]
-    S9 --> S10{预检通过?}
-    S10 -- 否 --> S11[自动回滚配置, 不重启服务]
-    S10 -- 是 --> S12[7. 设置 PermitRootLogin no & 禁用密码认证]
-    S12 --> S13[重载 sshd 服务, 加固成功]
+    S6 -- 是 --> S7[4. 配置防火墙: 先放行目标 SSH 端口再设默认策略]
+    S7 --> S8[5. 备份并安装候选配置, 二次 sshd -t]
+    S8 --> S9[6. 重载 sshd 服务]
+    S9 --> S10{重载成功?}
+    S10 -- 否 --> S11[自动回滚 sshd_config, 恢复原服务状态]
+    S10 -- 是 --> S12[7. 对账清除已撤销端口 + 端口审计]
+    S12 --> S13[8. 持久化策略至 ~/.config/rig/config]
 ```
 
 ### 2.3 端口双层审计对比逻辑
@@ -141,10 +141,14 @@ rig export
 rig uninstall
 ```
 
-### 3.2 VPS Profile 配置示例 (`~/.config/rig/profiles/vps.conf`)
+### 3.2 VPS 基线配置示例 (`~/.config/rig/config`)
+
+Profile 为 install.sh 内置 preset（`minimal/agent/devops/vps/fullstack`），
+`rig apply --profile vps` 等价于 `install.sh --preset vps`。
+安全与组件选择的持久化配置统一存放于 `~/.config/rig/config`：
 
 ```bash
-# 组件清单
+# 组件清单（install.sh --preset/--components 传入，不写进该文件）
 RIG_COMPONENTS="shell git tools neovim containers tailscale ssh security"
 
 # 容器配置

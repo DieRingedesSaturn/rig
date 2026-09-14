@@ -91,15 +91,6 @@ if [[ "$NVIM_BIN" != "$HOME"* ]] && command -v update-alternatives >/dev/null 2>
     echo "  System-level alternatives set to $NVIM_BIN (editor, vi)"
 fi
 
-# Shell environment export block
-SHELL_EDITOR_BLOCK='
-# Neovim default editor & aliases
-export EDITOR="nvim"
-export VISUAL="nvim"
-export SUDO_EDITOR="nvim"
-alias vim="nvim"
-'
-
 # Read-only check for user rc files
 for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
     [[ -f "$rc" ]] || continue

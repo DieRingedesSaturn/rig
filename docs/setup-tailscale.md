@@ -24,14 +24,15 @@ Tailscale's official installer supports all major platforms:
 
 | Step | Action |
 |------|--------|
-| 1/2 | Install Tailscale via official install script. Skip if `tailscale` command exists. |
-| 2/2 | If `TAILSCALE_AUTH_KEY` is set, run `tailscale up --auth-key=KEY --advertise-exit-node`. Otherwise print hint. |
+| 1/2 | Install Tailscale: Linux via the official install script, macOS via `brew install --cask tailscale`. Skip if `tailscale` command exists. |
+| 2/2 | If `TAILSCALE_AUTH_KEY` is set, run `tailscale up --auth-key=KEY`. Adds `--advertise-exit-node` only when `TAILSCALE_ADVERTISE_EXIT_NODE=1`. Otherwise print hint. |
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TAILSCALE_AUTH_KEY` | _(empty)_ | Auth key for automatic `tailscale up`. Leave empty to install only. Create one at [Tailscale Admin Console](https://login.tailscale.com/admin/machines/new-linux). |
+| `TAILSCALE_ADVERTISE_EXIT_NODE` | `0` | Set to `1` to advertise this host as a tailnet exit node. Off by default: offering to route other devices' traffic is a network-policy change and is opt-in. |
 
 ## Re-run Behavior
 

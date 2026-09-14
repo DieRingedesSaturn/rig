@@ -116,19 +116,15 @@ setup_colors() {
     if [[ -t 1 ]] || [[ "${FORCE_COLOR:-}" == "1" ]]; then
         RED='\033[0;31m'
         GREEN='\033[0;32m'
-        YELLOW='\033[0;33m'
         CYAN='\033[0;36m'
-        WHITE='\033[1;37m'
         BOLD='\033[1m'
         DIM='\033[2m'
         NC='\033[0m'
         SYM_CHECK="${GREEN}✔${NC}"
-        SYM_WARN="${YELLOW}▲${NC}"
-        SYM_CROSS="${RED}✘${NC}"
     else
-        RED='' GREEN='' YELLOW='' CYAN='' WHITE=''
+        RED='' GREEN='' CYAN=''
         BOLD='' DIM='' NC=''
-        SYM_CHECK='[ok]' SYM_WARN='[!]' SYM_CROSS='[fail]'
+        SYM_CHECK='[ok]'
     fi
 }
 

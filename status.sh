@@ -135,8 +135,7 @@ detect_shell() {
 
         # Starship
         local has_starship=0
-        local starship_path
-        starship_path=$(resolve_cmd starship) && has_starship=1
+        resolve_cmd starship >/dev/null && has_starship=1
 
         # This component never edits ~/.zshrc, so "configured" means the rc file
         # actually loads what we installed. Comment lines are ignored so a
@@ -446,9 +445,22 @@ detect_tailscale() {
 detect_ssh() {
     local status="not_installed" version="N/A" config="not-configured"
 
-    local ssh_path
-    if ssh_path=$(resolve_cmd ssh); then
-        version=$("$ssh_path" -V 2>&1 | head -1 | sed 's/,.*//' | sed 's/OpenSSH_//' || echo "N/A")
+    # The component manages the OpenSSH *server*: an ssh client alone does not
+    # count. sshd usually lives in /usr/sbin, outside a minimal PATH.
+    local sshd_found=0
+    if is_macos; then
+        sshd_found=1
+    elif resolve_cmd sshd >/dev/null 2>&1 \
+        || [[ -x /usr/sbin/sshd || -x /usr/libexec/sshd || -x /usr/lib/ssh/sshd ]]; then
+        sshd_found=1
+    fi
+
+    if [[ $sshd_found -eq 1 ]]; then
+        # Version comes from the client binary — same OpenSSH package family.
+        local ssh_path
+        if ssh_path=$(resolve_cmd ssh); then
+            version=$("$ssh_path" -V 2>&1 | head -1 | sed 's/,.*//' | sed 's/OpenSSH_//' || echo "N/A")
+        fi
         status="installed"
         config="install-only"
 
@@ -465,8 +477,9 @@ detect_ssh() {
         # Check if sshd is running (platform-specific)
         local sshd_running=0
         if is_macos; then
-            # On macOS, check Remote Login via System Preferences (launchd)
-            if sudo launchctl list 2>/dev/null | grep -q "com.openssh.sshd" 2>/dev/null; then
+            # On macOS, check Remote Login via System Preferences (launchd).
+            # sudo -n: a read-only status report must never prompt.
+            if sudo -n launchctl list 2>/dev/null | grep -q "com.openssh.sshd" 2>/dev/null; then
                 sshd_running=1
             fi
         else
@@ -480,61 +493,6 @@ detect_ssh() {
             status="partial"
             config="install-only"
         fi
-    fi
-
-    echo "${status}|${version}|${config}"
-}
-
-detect_essential_tools() {
-    # This is a meta-check for the overall Essential Tools component from setup-tools.sh
-    # It checks whether the full set is properly installed with symlinks
-    local status="not_installed" version="N/A" config="not-configured"
-
-    local core_tools=(rg jq fd bat gh)
-    local found=0
-    local total=${#core_tools[@]}
-
-    for tool in "${core_tools[@]}"; do
-        if resolve_cmd "$tool" >/dev/null 2>&1; then
-            found=$((found + 1))
-        elif is_debian && [[ "$tool" == "fd" ]] && resolve_cmd fdfind >/dev/null 2>&1; then
-            found=$((found + 1))
-        elif is_debian && [[ "$tool" == "bat" ]] && resolve_cmd batcat >/dev/null 2>&1; then
-            found=$((found + 1))
-        fi
-    done
-
-    # Check symlinks for Debian renames (only on Debian)
-    local symlinks_ok=1
-    if is_debian; then
-        if resolve_cmd fdfind >/dev/null 2>&1 && ! resolve_cmd fd >/dev/null 2>&1; then
-            symlinks_ok=0
-        fi
-        if resolve_cmd batcat >/dev/null 2>&1 && ! resolve_cmd bat >/dev/null 2>&1; then
-            symlinks_ok=0
-        fi
-    fi
-
-    if [[ $found -eq $total ]]; then
-        status="installed"
-        if [[ $symlinks_ok -eq 1 ]]; then
-            config="configured"
-        else
-            config="install-only"
-            status="partial"
-        fi
-        # Show gh version as representative
-        local gh_path gh_ver
-        if gh_path=$(resolve_cmd gh); then
-            gh_ver=$("$gh_path" version 2>/dev/null | head -1 | sed 's/gh version //' | awk '{print $1}' || echo "N/A")
-        else
-            gh_ver="N/A"
-        fi
-        version="gh ${gh_ver}"
-    elif [[ $found -gt 0 ]]; then
-        status="partial"
-        config="install-only"
-        version="${found}/${total} core"
     fi
 
     echo "${status}|${version}|${config}"

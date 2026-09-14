@@ -25,6 +25,12 @@ set -euo pipefail
 VERSION="0.1.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# On-disk copy of the repo scripts. Populated on every successful download so
+# an installed rig keeps working when GitHub (or the configured proxy) is
+# unreachable.
+RIG_CACHE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/rig/scripts"
+RIG_LIB_FILES="os-detect.sh pkg-maps.sh pkg-manager.sh rig-config.sh containers.sh docker.sh podman.sh tools.sh firewall.sh security.sh backup.sh"
+
 # Prevent gh-proxy.org from rewriting these URLs in proxied content
 _GH="github.com"
 _RAW="raw.githubusercontent.com"
@@ -57,14 +63,13 @@ setup_colors() {
     if [[ -t 1 ]] || [[ "${FORCE_COLOR:-}" == "1" ]]; then
         RED='\033[0;31m'
         GREEN='\033[0;32m'
-        YELLOW='\033[0;33m'
         CYAN='\033[0;36m'
         WHITE='\033[1;37m'
         BOLD='\033[1m'
         DIM='\033[2m'
         NC='\033[0m'
     else
-        RED='' GREEN='' YELLOW='' CYAN='' WHITE=''
+        RED='' GREEN='' CYAN='' WHITE=''
         BOLD='' DIM='' NC=''
     fi
 }
@@ -85,6 +90,25 @@ build_url() {
     fi
 }
 
+# cache_has_script - True when the offline cache holds the script and every
+# lib file it may source.
+cache_has_script() {
+    local script="$1" f
+    [[ -f "$RIG_CACHE_DIR/$script" ]] || return 1
+    for f in $RIG_LIB_FILES; do
+        [[ -f "$RIG_CACHE_DIR/lib/$f" ]] || return 1
+    done
+    return 0
+}
+
+run_cached() {
+    local script="$1" reason="$2"
+    shift 2
+    printf 'warn: %s; running cached copy of %s (%s)\n' "$reason" "$script" "$RIG_CACHE_DIR" >&2
+    bash "$RIG_CACHE_DIR/$script" "$@"
+    exit $?
+}
+
 download_and_run() {
     local script="$1"
     shift
@@ -97,6 +121,9 @@ download_and_run() {
     fi
 
     if ! command -v curl &>/dev/null; then
+        if cache_has_script "$script"; then
+            run_cached "$script" "curl is not installed" "$@"
+        fi
         die "curl is required but not found"
     fi
 
@@ -107,20 +134,33 @@ download_and_run() {
 
     # Download lib files first (scripts source these); fail early on error
     mkdir -p "$tmpdir/lib"
-    local lib_file
-    for lib_file in os-detect.sh pkg-maps.sh pkg-manager.sh rig-config.sh containers.sh docker.sh podman.sh tools.sh firewall.sh security.sh backup.sh; do
+    local download_ok=1 lib_file
+    for lib_file in $RIG_LIB_FILES; do
         if ! curl -fsSL "$(build_url "lib/$lib_file")" -o "$tmpdir/lib/$lib_file" 2>/dev/null; then
-            rm -rf "$tmpdir"
-            die "Failed to download lib/$lib_file"
+            download_ok=0
+            break
         fi
     done
 
     # Download the target script
-    if ! curl -fsSL "$(build_url "$script")" -o "$tmpdir/$script"; then
+    if [[ $download_ok -eq 1 ]] && ! curl -fsSL "$(build_url "$script")" -o "$tmpdir/$script" 2>/dev/null; then
+        download_ok=0
+    fi
+
+    if [[ $download_ok -eq 0 ]]; then
         rm -rf "$tmpdir"
-        die "Failed to download $script"
+        if cache_has_script "$script"; then
+            run_cached "$script" "download failed" "$@"
+        fi
+        die "Failed to download $script (and no cached copy at $RIG_CACHE_DIR)"
     fi
     chmod +x "$tmpdir/$script"
+
+    # Refresh the offline cache with exactly the bits we are about to run.
+    if mkdir -p "$RIG_CACHE_DIR/lib" 2>/dev/null; then
+        cp -f "$tmpdir"/lib/*.sh "$RIG_CACHE_DIR/lib/" 2>/dev/null || true
+        cp -f "$tmpdir/$script" "$RIG_CACHE_DIR/$script" 2>/dev/null || true
+    fi
 
     # Run script in a subshell so cleanup happens after it exits.
     # Cannot use exec here because that would skip cleanup.

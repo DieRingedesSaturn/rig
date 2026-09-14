@@ -74,7 +74,6 @@ done
 
 setup_colors() {
     if [[ -t 1 ]] || [[ "${FORCE_COLOR:-}" == "1" ]]; then
-        RED='\033[0;31m'
         GREEN='\033[0;32m'
         YELLOW='\033[0;33m'
         CYAN='\033[0;36m'
@@ -83,11 +82,10 @@ setup_colors() {
         NC='\033[0m'
         SYM_CHECK="${GREEN}✔${NC}"
         SYM_WARN="${YELLOW}▲${NC}"
-        SYM_CROSS="${RED}✘${NC}"
     else
-        RED='' GREEN='' YELLOW='' CYAN=''
+        GREEN='' YELLOW='' CYAN=''
         BOLD='' DIM='' NC=''
-        SYM_CHECK='[ok]' SYM_WARN='[!]' SYM_CROSS='[fail]'
+        SYM_CHECK='[ok]' SYM_WARN='[!]'
     fi
 }
 
@@ -167,8 +165,11 @@ detect_installed() {
     # Tailscale
     command -v tailscale &>/dev/null && components+=("tailscale")
 
-    # SSH
-    command -v ssh &>/dev/null && [[ -d "$HOME/.ssh" ]] && components+=("ssh")
+    # SSH — the component manages the OpenSSH *server* (sshd); a machine with
+    # only the ssh client installed is not covered by it.
+    if command -v sshd &>/dev/null || [[ -x /usr/sbin/sshd || -x /usr/libexec/sshd || -x /usr/lib/ssh/sshd ]] || is_macos; then
+        components+=("ssh")
+    fi
 
     # Security Baseline
     if [[ -f /etc/ssh/sshd_config ]] && grep -q "# Rig Security Baseline" /etc/ssh/sshd_config 2>/dev/null; then
@@ -239,7 +240,28 @@ extract_config() {
     fi
 
     if [[ "$engine" == "podman" && -f "$HOME/.config/containers/registries.conf" ]]; then
-        mirrors=$(grep -o 'location[[:space:]]*=[[:space:]]*"[^"]*"' "$HOME/.config/containers/registries.conf" 2>/dev/null | tail -1 || true)
+        # registries.conf is TOML: collect only [[registry.mirror]] locations.
+        # The top-level `location` is the upstream registry, not a mirror, and
+        # a raw TOML line must never be embedded into our JSON output.
+        local -a _mirror_urls=()
+        while IFS= read -r _u; do
+            [[ -n "$_u" ]] && _mirror_urls+=("$_u")
+        done < <(awk '
+            /^[[:space:]]*\[\[registry\.mirror\]\]/ { in_mirror = 1; next }
+            /^[[:space:]]*\[\[/ { in_mirror = 0 }
+            in_mirror && /location[[:space:]]*=/ {
+                if (match($0, /"[^"]*"/)) print substr($0, RSTART + 1, RLENGTH - 2)
+            }
+        ' "$HOME/.config/containers/registries.conf" 2>/dev/null)
+        if [[ ${#_mirror_urls[@]} -gt 0 ]]; then
+            mirrors='"registry-mirrors": ['
+            local _mi
+            for _mi in "${!_mirror_urls[@]}"; do
+                [[ $_mi -gt 0 ]] && mirrors+=', '
+                mirrors+="\"$(json_escape "${_mirror_urls[$_mi]}")\""
+            done
+            mirrors+=']'
+        fi
     elif [[ -f "$HOME/.config/docker/daemon.json" ]]; then
         mirrors=$(grep -o '"registry-mirrors"[[:space:]]*:[[:space:]]*\[[^]]*\]' "$HOME/.config/docker/daemon.json" 2>/dev/null || true)
     elif [[ -f /etc/docker/daemon.json ]]; then

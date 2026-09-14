@@ -24,6 +24,17 @@ source "$SCRIPT_DIR/lib/firewall.sh"
 # shellcheck source=lib/security.sh
 source "$SCRIPT_DIR/lib/security.sh"
 
+# Colors: libraries only set raw "\033" defaults; give them real meaning on a
+# terminal and strip them entirely when output is redirected.
+# YELLOW/CYAN are consumed by lib/security.sh helpers, not by this file.
+# shellcheck disable=SC2034
+if [[ -t 1 || "${FORCE_COLOR:-}" == "1" ]]; then
+    RED='\033[0;31m' GREEN='\033[0;32m' YELLOW='\033[0;33m'
+    CYAN='\033[0;36m' BOLD='\033[1m' DIM='\033[2m' NC='\033[0m'
+else
+    RED='' GREEN='' YELLOW='' CYAN='' BOLD='' DIM='' NC=''
+fi
+
 # Parse command-line options
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -56,19 +67,21 @@ RIG_FIREWALL_DEFAULT_OUT="$(rig_config_get RIG_FIREWALL_DEFAULT_OUT "allow")"
 RIG_PUBLIC_TCP="$(rig_config_get RIG_PUBLIC_TCP "$RIG_SSH_PORT")"
 PREVIOUS_PUBLIC_TCP="$RIG_PUBLIC_TCP"
 RIG_PUBLIC_UDP="$(rig_config_get RIG_PUBLIC_UDP "")"
+PREVIOUS_PUBLIC_UDP="$RIG_PUBLIC_UDP"
 RIG_CHECK_LISTENING_PORTS="$(rig_config_get RIG_CHECK_LISTENING_PORTS "yes")"
 RIG_WARN_UNDECLARED_PORTS="$(rig_config_get RIG_WARN_UNDECLARED_PORTS "yes")"
 
 csv_without_port() {
-    local csv="$1" excluded="$2" item result=""
+    local csv="$1" excluded="$2" item
+    local kept=""
     local -a entries=()
     IFS=',' read -r -a entries <<< "$csv"
     for item in "${entries[@]}"; do
         item="$(printf '%s' "$item" | tr -d ' ')"
         [[ -z "$item" || "$item" == "$excluded" ]] && continue
-        if [[ -n "$result" ]]; then result="$result,$item"; else result="$item"; fi
+        if [[ -n "$kept" ]]; then kept="$kept,$item"; else kept="$item"; fi
     done
-    printf '%s\n' "$result"
+    printf '%s\n' "$kept"
 }
 
 csv_prepend_unique() {
@@ -184,19 +197,19 @@ fi
 
 if [[ $LOCKOUT_RISK -eq 1 ]]; then
     if [[ "$RIG_ADMIN_USER" == "root" ]]; then
-        echo "  ${RED}Error: Cannot harden SSH when RIG_ADMIN_USER is root!${NC}" >&2
+        printf "  ${RED}Error: Cannot harden SSH when RIG_ADMIN_USER is root!${NC}\n" >&2
         echo "  You must designate a non-root admin user with sudo privileges and an SSH key." >&2
         exit 1
     fi
 
     if ! security_verify_admin_user "$RIG_ADMIN_USER"; then
-        echo "  ${RED}FATAL: Anti-lockout guard blocked hardening!${NC}" >&2
+        printf "  ${RED}FATAL: Anti-lockout guard blocked hardening!${NC}\n" >&2
         echo "  User '$RIG_ADMIN_USER' either does not exist, lacks sudo privileges, or" >&2
-        echo "  has no valid SSH public keys in ~/.ssh/authorized_keys." >&2
+        echo "  has no valid SSH public keys in an authorized-keys file sshd accepts." >&2
         echo "  Refusing to disable root SSH login or password authentication." >&2
         exit 1
     fi
-    echo "  ${GREEN}✔ Anti-lockout check passed:${NC} Admin user '$RIG_ADMIN_USER' verified (sudo + SSH key active)."
+    printf "  ${GREEN}✔ Anti-lockout check passed:${NC} Admin user '%s' verified (sudo + SSH key active).\n" "$RIG_ADMIN_USER"
 else
     echo "  Anti-lockout check skipped (root/password login not being disabled)."
 fi
@@ -212,10 +225,10 @@ if [[ -f "$SSHD_CONFIG" ]]; then
         "$RIG_SSH_PORT" "$RIG_SSH_ROOT_LOGIN" \
         "$RIG_SSH_PASSWORD_AUTH" "$RIG_SSH_PUBKEY_AUTH"
     if ! security_test_sshd_config "$SSHD_CANDIDATE"; then
-        echo "  ${RED}ERROR: candidate sshd configuration failed preflight; no system changes were made.${NC}" >&2
+        printf "  ${RED}ERROR: candidate sshd configuration failed preflight; no system changes were made.${NC}\n" >&2
         exit 1
     fi
-    echo "  ${GREEN}✔ Candidate sshd configuration passed syntax preflight.${NC}"
+    printf "  ${GREEN}✔ Candidate sshd configuration passed syntax preflight.${NC}\n"
 fi
 
 # --- [2/5] Firewall Provisioning ---------------------------------------------
@@ -224,11 +237,11 @@ echo "[2/5] Configuring firewall..."
 
 if [[ "$RIG_SSH_ACCESS" == "tailscale" ]]; then
     if command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; then
-        echo "  ${GREEN}✔ Tailscale is active.${NC}"
+        printf "  ${GREEN}✔ Tailscale is active.${NC}\n"
     else
-        echo "  ${RED}ERROR: Tailscale is not running or not connected!${NC}" >&2
+        printf "  ${RED}ERROR: Tailscale is not running or not connected!${NC}\n" >&2
         echo "  Restricting SSH to tailscale0 while Tailscale is inactive would lock you out." >&2
-        echo "  Please start Tailscale ('tailscale up') or change RIG_SSH_ACCESS to 'public' first.${NC}" >&2
+        printf "  Please start Tailscale ('tailscale up') or change RIG_SSH_ACCESS to 'public' first.${NC}\n" >&2
         exit 1
     fi
 fi
@@ -236,13 +249,13 @@ fi
 FW_BACKEND="$(firewall_detect_backend "$RIG_FIREWALL")"
 if [[ "$FW_BACKEND" == "none" ]]; then
     if [[ "$RIG_SSH_ACCESS" == "tailscale" ]]; then
-        echo "  ${RED}ERROR: Tailscale-only SSH requires a supported firewall backend.${NC}" >&2
+        printf "  ${RED}ERROR: Tailscale-only SSH requires a supported firewall backend.${NC}\n" >&2
         exit 1
     fi
     echo "  No supported firewall engine for this system, skipping."
 else
     if [[ "$FW_BACKEND" == "firewalld" && "$RIG_FIREWALL_DEFAULT_OUT" != "allow" ]]; then
-        echo "  ${RED}ERROR: firewalld cannot enforce RIG_FIREWALL_DEFAULT_OUT=$RIG_FIREWALL_DEFAULT_OUT.${NC}" >&2
+        printf "  ${RED}ERROR: firewalld cannot enforce RIG_FIREWALL_DEFAULT_OUT=$RIG_FIREWALL_DEFAULT_OUT.${NC}\n" >&2
         exit 1
     fi
     echo "  Firewall backend: $FW_BACKEND"
@@ -288,7 +301,7 @@ else
     else
         firewall_reload "$FW_BACKEND"
     fi
-    echo "  ${GREEN}✔ Firewall configured and enabled.${NC}"
+    printf "  ${GREEN}✔ Firewall configured and enabled.${NC}\n"
 fi
 
 # --- [3/5] SSH Hardening & sshd -t Preflight --------------------------------
@@ -296,36 +309,45 @@ echo ""
 echo "[3/5] Hardening OpenSSH server..."
 
 if [[ -f "$SSHD_CONFIG" ]]; then
-    ORIGINAL_CONFIG="$(rig_system_backup_once "$SSHD_CONFIG" pre-rig)"
+    rig_system_backup_once "$SSHD_CONFIG" pre-rig >/dev/null
     BACKUP_CONFIG="$(rig_system_backup "$SSHD_CONFIG" security)"
     echo "  Backup: $BACKUP_CONFIG"
     sudo cp "$SSHD_CANDIDATE" "$SSHD_CONFIG"
 
     # Re-check the installed file, then reload with rollback on any failure.
     if security_test_sshd_config; then
-        echo "  ${GREEN}✔ sshd -t syntax preflight passed.${NC}"
-        # Reload sshd safely with rollback on failure
-        reload_ok=1
+        printf "  ${GREEN}✔ sshd -t syntax preflight passed.${NC}\n"
+        # Reload sshd safely with rollback on failure. reload_ok starts at 0:
+        # a branch that never runs must report failure, not silent success.
+        reload_ok=0
         if command -v systemctl >/dev/null 2>&1 && systemctl is-system-running >/dev/null 2>&1; then
-            if is_debian; then
-                sudo systemctl reload-or-restart ssh 2>/dev/null || sudo systemctl restart ssh 2>/dev/null || reload_ok=0
-            else
-                sudo systemctl reload-or-restart sshd 2>/dev/null || sudo systemctl restart sshd 2>/dev/null || reload_ok=0
+            sshd_svc="sshd"
+            if is_debian; then sshd_svc="ssh"; fi
+            if sudo systemctl reload-or-restart "$sshd_svc" 2>/dev/null || sudo systemctl restart "$sshd_svc" 2>/dev/null; then
+                reload_ok=1
             fi
         elif command -v service >/dev/null 2>&1; then
-            if is_debian; then
-                sudo service ssh reload 2>/dev/null || sudo service ssh restart 2>/dev/null || reload_ok=0
-            else
-                sudo service sshd reload 2>/dev/null || sudo service sshd restart 2>/dev/null || reload_ok=0
+            sshd_svc="sshd"
+            if is_debian; then sshd_svc="ssh"; fi
+            if sudo service "$sshd_svc" reload 2>/dev/null || sudo service "$sshd_svc" restart 2>/dev/null; then
+                reload_ok=1
             fi
         elif is_macos; then
             echo "  macOS detected: sshd configuration updated."
+            reload_ok=1
+        elif command -v pkill >/dev/null 2>&1; then
+            # Last resort: SIGHUP makes the running sshd re-exec itself and
+            # reload the configuration without dropping existing sessions —
+            # including the SSH session this script may be running over.
+            if sudo pkill -HUP -x sshd 2>/dev/null; then
+                reload_ok=1
+            fi
         fi
 
         if [[ $reload_ok -eq 1 ]]; then
-            echo "  ${GREEN}✔ sshd reloaded with hardened policies.${NC}"
+            printf "  ${GREEN}✔ sshd reloaded with hardened policies.${NC}\n"
         else
-            echo "  ${RED}ERROR: sshd reload/restart failed! Rolling back sshd_config...${NC}" >&2
+            printf "  ${RED}ERROR: sshd reload/restart failed! Rolling back sshd_config...${NC}\n" >&2
             sudo cp "$BACKUP_CONFIG" "$SSHD_CONFIG"
             if command -v systemctl >/dev/null 2>&1; then
                 sudo systemctl restart ssh 2>/dev/null || sudo systemctl restart sshd 2>/dev/null || true
@@ -334,7 +356,7 @@ if [[ -f "$SSHD_CONFIG" ]]; then
             exit 1
         fi
     else
-        echo "  ${RED}ERROR: sshd -t test failed! Rolling back sshd_config...${NC}" >&2
+        printf "  ${RED}ERROR: sshd -t test failed! Rolling back sshd_config...${NC}\n" >&2
         sudo cp "$BACKUP_CONFIG" "$SSHD_CONFIG"
         echo "  Rolled back to previous working configuration. Service was not restarted." >&2
         exit 1
@@ -353,6 +375,17 @@ if [[ "$FW_BACKEND" != "none" ]]; then
         if ! csv_has_port "$RIG_PUBLIC_TCP" "$p"; then
             echo "  Removing no-longer-declared public rule $p/tcp..."
             firewall_remove_public_port "$FW_BACKEND" "$p" tcp
+        fi
+    done
+    # Same reconciliation for UDP: a port dropped from RIG_PUBLIC_UDP must not
+    # leave a stale allow rule behind.
+    IFS=',' read -r -a previous_udp_ports <<< "$PREVIOUS_PUBLIC_UDP"
+    for p in "${previous_udp_ports[@]}"; do
+        p="$(printf '%s' "$p" | tr -d ' ')"
+        [[ -z "$p" ]] && continue
+        if ! csv_has_port "$RIG_PUBLIC_UDP" "$p"; then
+            echo "  Removing no-longer-declared public rule $p/udp..."
+            firewall_remove_public_port "$FW_BACKEND" "$p" udp
         fi
     done
     if [[ "$RIG_SSH_ACCESS" == "tailscale" ]]; then

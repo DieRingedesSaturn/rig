@@ -35,7 +35,7 @@ Configures SSH server: custom port, key-only authentication, and GitHub SSH prox
 |------|--------|
 | 1/5 | Ensure `sshd` is installed and running |
 | 2/5 | Import private key to `~/.ssh/` (if `SSH_PRIVATE_KEY` is set), derive `.pub` |
-| 3/5 | Set custom port in `sshd_config` (if `SSH_PORT` is set) |
+| 3/5 | Set custom port in `sshd_config` (if `SSH_PORT` is set). Changes are rendered into the global section, preflighted with `sshd -t`, then applied; a failed check leaves the live config untouched |
 | 4/5 | Add public key to `~/.ssh/authorized_keys` (if `SSH_PUBKEY` is set) |
 | 5/5 | Configure GitHub SSH proxy in `~/.ssh/config` (if `SSH_PROXY_PORT` is set) |
 
@@ -67,7 +67,7 @@ Configures SSH server: custom port, key-only authentication, and GitHub SSH prox
 - Private key: skipped if key file already exists.
 - Public key: skipped if already in `authorized_keys`.
 - GitHub SSH config: skipped if `Host github.com` block already exists in `~/.ssh/config`.
-- `sshd_config` is backed up before each modification.
+- `sshd_config` is backed up before each modification; a restart failure restores the previous configuration automatically.
 
 ## Dependencies
 

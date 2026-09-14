@@ -24,14 +24,15 @@ Tailscale 官方安装器支持所有主流平台：
 
 | 步骤 | 操作 |
 |------|------|
-| 1/2 | 通过官方安装脚本安装 Tailscale。`tailscale` 命令存在则跳过。 |
-| 2/2 | 如设置 `TAILSCALE_AUTH_KEY`，执行 `tailscale up --auth-key=KEY --advertise-exit-node`。否则提示手动连接。 |
+| 1/2 | 安装 Tailscale：Linux 走官方安装脚本，macOS 走 `brew install --cask tailscale`。`tailscale` 命令存在则跳过。 |
+| 2/2 | 如设置 `TAILSCALE_AUTH_KEY`，执行 `tailscale up --auth-key=KEY`。仅当 `TAILSCALE_ADVERTISE_EXIT_NODE=1` 时附加 `--advertise-exit-node`。否则提示手动连接。 |
 
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `TAILSCALE_AUTH_KEY` | _（空）_ | 自动连接的 Auth Key。留空则仅安装。前往 [Tailscale 管理后台](https://login.tailscale.com/admin/machines/new-linux) 创建。 |
+| `TAILSCALE_ADVERTISE_EXIT_NODE` | `0` | 设为 `1` 时把本机通告为 tailnet 出口节点。默认关闭：为其他设备转发流量属于网络策略变更，需显式开启。 |
 
 ## 重复运行行为
 

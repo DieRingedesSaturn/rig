@@ -30,6 +30,13 @@ BRANCH="master"
 BASE_URL="https://${_RAW}/${REPO}/${BRANCH}"
 
 export GH_PROXY="${GH_PROXY:-}"
+# GH_PROXY routes every downloaded script through a third party; only HTTPS is
+# acceptable (same rule the rig CLI enforces). Checked early because the lib
+# downloads below already honor it.
+if [[ -n "$GH_PROXY" && "$GH_PROXY" != https://* ]]; then
+    echo "error: GH_PROXY must use https:// (got: $GH_PROXY)" >&2
+    exit 1
+fi
 NON_INTERACTIVE=0
 INTERACTIVE=0
 VERBOSE=0
@@ -86,13 +93,11 @@ setup_colors() {
         RED='\033[0;31m'
         GREEN='\033[0;32m'
         YELLOW='\033[0;33m'
-        BLUE='\033[0;34m'
         MAGENTA='\033[0;35m'
         CYAN='\033[0;36m'
         WHITE='\033[1;37m'
         BOLD='\033[1m'
         DIM='\033[2m'
-        ITALIC='\033[3m'
         NC='\033[0m'
         HIDE_CURSOR='\033[?25l'
         SHOW_CURSOR='\033[?25h'
@@ -107,14 +112,13 @@ setup_colors() {
         SYM_DOWN="${CYAN}↓${NC}"
         SYM_PLAY="${CYAN}▶${NC}"
         SYM_KEY="${MAGENTA}🔑${NC}"
-        SYM_LOCK="${DIM}🔒${NC}"
     else
-        RED='' GREEN='' YELLOW='' BLUE='' MAGENTA='' CYAN='' WHITE=''
-        BOLD='' DIM='' ITALIC='' NC=''
+        RED='' GREEN='' YELLOW='' MAGENTA='' CYAN='' WHITE=''
+        BOLD='' DIM='' NC=''
         HIDE_CURSOR='' SHOW_CURSOR='' CLEAR_LINE=''
         SYM_CHECK='[ok]' SYM_CROSS='[fail]' SYM_ARROW='>' SYM_DOT='[ ]'
         SYM_FILL='[x]' SYM_WARN='[!]' SYM_DOWN='[-]' SYM_PLAY='[>]'
-        SYM_KEY='[key]' SYM_LOCK='[*]'
+        SYM_KEY='[key]'
     fi
 }
 
@@ -178,8 +182,9 @@ _init_sudo_needs() {
         # shell, tmux, git, tools, neovim, node, uv: no sudo (brew installs to user dir)
         # containers, tailscale, ssh, security: still need sudo (system-level services)
     else
-        # Linux: original behavior
-        COMP_NEEDS_SUDO=(1 1 0 1 1 0 0 1 1 1 1)
+        # Linux: package installs all need sudo (git included — setup-git.sh
+        # runs pkg_install); node (nvm) and uv install into ~ and do not.
+        COMP_NEEDS_SUDO=(1 1 1 1 1 0 0 1 1 1 1)
     fi
 }
 _init_sudo_needs
@@ -897,8 +902,10 @@ run_component() {
     # Reload env between components
     load_env
 
-    # Auto-set Docker mirror when behind GH_PROXY (likely in China)
-    if [[ "${COMP_IDS[$idx]}" == "docker" && -n "$GH_PROXY" && -z "${DOCKER_MIRROR:-}" ]]; then
+    # Auto-set Docker mirror when behind GH_PROXY (likely in China). The
+    # containers component is what may install Docker; there is no "docker"
+    # entry in COMP_IDS, so keying on it here actually reaches lib/docker.sh.
+    if [[ "${COMP_IDS[$idx]}" == "containers" && -n "$GH_PROXY" && -z "${DOCKER_MIRROR:-}" ]]; then
         export DOCKER_MIRROR="https://docker.1ms.run"
     fi
 
@@ -1114,6 +1121,26 @@ install_rig_cli() {
     cp -f "$src" "$dest"
     chmod +x "$dest"
 
+    # Seed the offline script cache (~/.local/share/rig/scripts) so the
+    # installed CLI keeps working when GitHub is unreachable. Local checkouts
+    # copy for free; piped installs fetch each script once via download_script.
+    local seed_dir="${XDG_DATA_HOME:-$HOME/.local/share}/rig/scripts" sf
+    if mkdir -p "$seed_dir/lib" 2>/dev/null; then
+        if [[ -n "${_SCRIPT_DIR:-}" && -f "${_SCRIPT_DIR}/lib/os-detect.sh" ]]; then
+            cp -f "${_SCRIPT_DIR}/lib/"*.sh "$seed_dir/lib/" 2>/dev/null || true
+            for sf in "${COMP_SCRIPTS[@]}" install.sh update.sh status.sh export-config.sh import-config.sh uninstall.sh; do
+                [[ -f "${_SCRIPT_DIR}/${sf}" ]] && cp -f "${_SCRIPT_DIR}/${sf}" "$seed_dir/${sf}"
+            done
+        elif [[ -n "${TMPDIR_INSTALL:-}" && -d "${TMPDIR_INSTALL}/lib" ]]; then
+            cp -f "${TMPDIR_INSTALL}/lib/"*.sh "$seed_dir/lib/" 2>/dev/null || true
+            for sf in "${COMP_SCRIPTS[@]}" install.sh update.sh status.sh export-config.sh import-config.sh uninstall.sh; do
+                if download_script "$sf" 2>/dev/null; then
+                    cp -f "${TMPDIR_INSTALL}/${sf}" "$seed_dir/${sf}"
+                fi
+            done
+        fi
+    fi
+
     printf "  ${SYM_CHECK} ${GREEN}Installed rig CLI to ${CYAN}%s${NC}\n" "$dest"
 
     # Warn if ~/.local/bin is not in PATH
@@ -1178,6 +1205,10 @@ parse_args() {
                     exit 1
                 fi
                 GH_PROXY="$2"
+                if [[ "$GH_PROXY" != https://* ]]; then
+                    echo "error: --gh-proxy must use https:// (got: $GH_PROXY)" >&2
+                    exit 1
+                fi
                 shift 2
                 ;;
             --verbose|-v)
@@ -1201,7 +1232,16 @@ parse_args() {
                 else
                     url="${BASE_URL}/update.sh"
                 fi
-                exec bash <(curl -fsSL "$url") "$@"
+                # Download to a file first: `bash <(curl ...)` would silently
+                # succeed with an empty script when the fetch fails.
+                local _upd_tmp
+                _upd_tmp=$(mktemp)
+                if ! curl -fsSL -o "$_upd_tmp" "$url" || ! head -1 "$_upd_tmp" | grep -q '^#!/'; then
+                    rm -f "$_upd_tmp"
+                    printf "${RED}error:${NC} failed to download update.sh from %s\n" "$url" >&2
+                    exit 1
+                fi
+                exec bash "$_upd_tmp" "$@"
                 ;;
             *)
                 printf "${RED}Unknown option: %s${NC}\n" "$1"
@@ -1296,7 +1336,9 @@ main() {
 
     # Create temp directory for downloads
     TMPDIR_INSTALL=$(mktemp -d)
-    LOG_FILE="/tmp/rig-install-$(date +%Y%m%d-%H%M%S)"
+    # Per-run log dir: mktemp -d gives a private 0700 directory, avoiding the
+    # predictable-name race that a fixed /tmp/rig-install-* prefix would have.
+    LOG_FILE="$(mktemp -d "/tmp/rig-install-XXXXXXXX")/install"
 
     # Banner
     print_banner
