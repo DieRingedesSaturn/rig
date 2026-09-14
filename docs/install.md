@@ -15,7 +15,7 @@ All-in-one interactive or non-interactive installer. Downloads and executes indi
 When run with a terminal available and no `--all`/`--components` flag, a checkbox menu appears:
 
 ```
-  > [x] Shell Environment        zsh, Oh My Zsh, plugins, Starship           [sudo]
+  > [x] Shell Environment        zsh + Starship, no Oh My Zsh                [sudo]
     [ ] Tmux                     tmux + Catppuccin + TPM plugins              [sudo]
     [x] Node.js (nvm)            nvm + Node.js 24
     ...
@@ -26,17 +26,35 @@ Controls: `↑↓` navigate, `Space` toggle, `a` toggle all, `Enter` confirm, `q
 ### Non-Interactive
 
 - `--all` — select all components.
-- `--components shell,node,docker` — select specific components by ID.
+- `--components shell,node,containers` — select specific components by ID.
 
-If piped (`curl | bash`) without flags, the script exits with a usage hint.
+If piped (`curl | bash`) without flags and no `RIG_COMPONENTS` is configured, the script exits with a usage hint.
+
+### From the config file
+
+A component list declared in `~/.config/rig/config` is used as the default selection when the command line does not specify one:
+
+```bash
+# ~/.config/rig/config
+RIG_COMPONENTS="
+shell
+tmux
+git
+containers
+"
+```
+
+A bare `rig install` then installs exactly those components, non-interactively. The value may also be a single line — commas, spaces and newlines are all treated as separators. An explicit `--all`, `--components` or `--preset` on the command line takes precedence.
+
+The file is parsed, never sourced, and only these keys are read: `RIG_COMPONENTS`, `RIG_PROFILE`, `RIG_CONTAINER_ENGINE`, `RIG_CONTAINER_MODE`. An environment variable of the same name overrides the file for one run.
 
 ## Execution Flow
 
 1. **Parse arguments** — `--all`, `--components`, `--gh-proxy`, `--verbose`.
 2. **Show TUI** (interactive) or validate selection (non-interactive).
-3. **Resolve dependencies** — auto-adds missing deps (e.g., selecting Claude Code auto-adds Node.js).
+3. **Resolve dependencies** — auto-adds any missing dependency declared in the registry. No component currently declares one, but the mechanism remains for future components.
 4. **Show plan** — lists components in install order with tags (`sudo`, `key`, `install only`).
-5. **Collect API keys** — prompts for API URL/Key for AI agents (interactive), or reads from env vars (non-interactive). Missing keys result in "install only" mode.
+5. **Collect credentials** — prompts for a token where a component needs one (currently only Tailscale), or reads it from env vars (non-interactive). A missing token results in "install only" mode.
 6. **Cache sudo** — pre-authenticates sudo if any selected component needs it, then keeps it alive in the background.
 7. **Download scripts** — fetches all needed `setup-*.sh` to a temp directory (fail-fast: all downloads must succeed before any execution).
 8. **Execute** — runs each script in order. In default mode, shows a spinner; in `--verbose` mode, shows raw output.
@@ -44,22 +62,17 @@ If piped (`curl | bash`) without flags, the script exits with a usage hint.
 
 ## Dependency Resolution
 
-| Component | Depends On |
-|-----------|------------|
-| Claude Code | Node.js |
-| Codex CLI | Node.js |
-| Gemini CLI | Node.js |
-| Agent Skills | Node.js |
+The registry carries a per-component dependency list (`COMP_DEPS`), and dependencies are auto-added and installed first. **No component currently declares a dependency**, so nothing is auto-added today.
 
-Dependencies are auto-added and installed first. The install order follows the array index in the component registry.
+Install order follows the array index in the component registry.
 
-## API Key Handling
+## Credential Handling
 
-For AI agent components (Claude Code, Codex, Gemini):
+Only Tailscale needs a credential (an auth key, token-only):
 
-- **With env vars set** (`CLAUDE_API_URL` + `CLAUDE_API_KEY`) — tool is installed and configured.
-- **Without env vars** — in interactive mode, prompts for input (API Key is masked with `*`). Leaving blank results in "install only" mode.
-- **Install only** — the tool is installed but not configured. Post-install hints show which env vars to set later.
+- **With the env var set** (`TAILSCALE_AUTH_KEY`) — the tool is installed and connected.
+- **Without it** — in interactive mode the script prompts for it (input is masked with `*`). Leaving it blank results in "install only" mode.
+- **Install only** — the tool is installed but not configured. Post-install hints show which env var to set later.
 
 ## Error Handling
 
@@ -72,12 +85,7 @@ For AI agent components (Claude Code, Codex, Gemini):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GH_PROXY` | _(empty)_ | GitHub proxy URL prefix for script downloads |
-| `CLAUDE_API_URL` | _(empty)_ | API base URL for Claude Code |
-| `CLAUDE_API_KEY` | _(empty)_ | API key for Claude Code |
-| `CODEX_API_URL` | _(empty)_ | API base URL for Codex CLI |
-| `CODEX_API_KEY` | _(empty)_ | API key for Codex CLI |
-| `GEMINI_API_URL` | _(empty)_ | API base URL for Gemini CLI |
-| `GEMINI_API_KEY` | _(empty)_ | API key for Gemini CLI |
+| `TAILSCALE_AUTH_KEY` | _(empty)_ | Auth key for Tailscale auto-connect |
 
 All env vars from individual scripts are also respected (e.g., `NODE_VERSION`, `DOCKER_MIRROR`).
 

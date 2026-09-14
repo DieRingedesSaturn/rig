@@ -1,124 +1,98 @@
 # setup-tmux.sh
 
-Installs tmux, TPM plugin manager, Catppuccin theme, and essential plugins with full mouse interaction.
+Installs tmux and, **only when no configuration exists yet**, writes a minimal `tmux.conf`: extended keys, mouse support, a large scrollback, and a clipboard binding that actually works on the machine it runs on.
 
-## OS Support
+Deliberately **not** a tmux framework installer: no TPM, no Catppuccin, no plugin git clones. The config is a handful of lines you can read in one go.
 
-Works on all supported platforms:
+## Design Contract
 
-| OS | Package Manager | sudo Required |
-|----|----------------|---------------|
-| Debian/Ubuntu | `apt` | ✓ |
-| CentOS/RHEL | `yum`/`dnf` | ✓ |
-| Fedora | `dnf` | ✓ |
-| Arch Linux | `pacman` | ✓ |
-| macOS | `brew` | Homebrew operations only |
+| Path | Behaviour |
+|------|-----------|
+| `~/.tmux.conf` | Preserved by default (offers diff & interactive options) |
+| `~/.config/tmux/tmux.conf` | Preserved by default (offers diff & interactive options) |
+| Anything else | Untouched |
+
+Existing configurations are never overwritten without explicit interactive confirmation and automatic timestamped backup.
 
 ## What Gets Installed
 
-| Tool | Source | Description |
-|------|--------|-------------|
-| tmux | Package manager | Terminal multiplexer |
-| TPM | [tmux-plugins/tpm](https://github.com/tmux-plugins/tpm) | Tmux Plugin Manager |
-| tmux-sensible | [tmux-plugins/tmux-sensible](https://github.com/tmux-plugins/tmux-sensible) | Sensible defaults (ESC delay fix, history, etc.) |
-| Catppuccin | [catppuccin/tmux](https://github.com/catppuccin/tmux) | Catppuccin Mocha theme |
-| vim-tmux-navigator | [christoomey/vim-tmux-navigator](https://github.com/christoomey/vim-tmux-navigator) | Seamless Ctrl+h/j/k/l navigation between vim and tmux |
-| tmux-yank | [tmux-plugins/tmux-yank](https://github.com/tmux-plugins/tmux-yank) | System clipboard integration |
-| tmux-resurrect | [tmux-plugins/tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect) | Save and restore sessions |
-| tmux-continuum | [tmux-plugins/tmux-continuum](https://github.com/tmux-plugins/tmux-continuum) | Automatic session saving (uses resurrect) |
-
-## Configuration Generated
-
-The script generates `~/.tmux.conf` with these sections:
-
-### General
-
-- 256-color + RGB terminal support.
-- Windows and panes numbered from 1 (not 0).
-- `renumber-windows on` — no gaps after closing a window.
-- `detach-on-destroy off` — switch to another session instead of detaching when a session is destroyed.
-
-### Mouse Interactions
-
-All mouse features are enabled by default (`set -g mouse on`):
-
-| Action | Effect |
-|--------|--------|
-| Left-click window tab on status bar | Switch to that window |
-| Left-click session name (status bar left) | Open session/window tree picker |
-| Right-click on pane | Context menu: split, zoom, swap, kill |
-| Right-click window tab on status bar | Context menu: rename, new window, kill |
-| Right-click session name | Context menu: new session, rename, kill |
-| Double-click on pane | Toggle zoom (maximize/restore) |
-| Middle-click on pane | Paste buffer |
-| Scroll wheel on status bar | Cycle through windows |
-| Drag pane border | Resize pane |
-
-### Quick Navigation
-
-These keybindings work without prefix:
-
-| Key | Action |
-|-----|--------|
-| `Alt+1` .. `Alt+9` | Switch to window by number |
-| `Alt+n` | New window in current directory |
-
-### Custom Keybindings (optional)
-
-Disabled by default. Enable with `TMUX_KEYBINDS=1`:
-
-| Key | Action | Replaces |
-|-----|--------|----------|
-| `Ctrl+a` | Prefix key | `Ctrl+b` |
-| `Prefix + \|` | Vertical split | `Prefix + %` |
-| `Prefix + -` | Horizontal split | `Prefix + "` |
-| `Prefix + H/J/K/L` | Resize pane (repeatable) | — |
-
-## How It Works
-
-| Step | Action |
+| Tool | Source |
 |------|--------|
-| 1/4 | Install tmux via package manager (apt/yum/dnf/pacman/brew) |
-| 2/4 | `git clone` TPM to `~/.tmux/plugins/tpm` (supports `GH_PROXY`) |
-| 3/4 | Generate `~/.tmux.conf` — compare with existing, write only if different |
-| 4/4 | Clone each plugin to `~/.tmux/plugins/` (skipped if directory exists) |
+| tmux | Package manager (apt / dnf / yum / pacman / brew) |
 
-## Files Created/Modified
+**Not installed**: TPM, the Catppuccin theme, or any plugin. The previous version of this script installed six plugins and overwrote `~/.tmux.conf` outright.
 
-| File | Description |
-|------|-------------|
-| `~/.tmux.conf` | Generated configuration |
-| `~/.tmux/plugins/tpm/` | TPM installation |
-| `~/.tmux/plugins/tmux-sensible/` | Plugin |
-| `~/.tmux/plugins/tmux/` | Catppuccin theme |
-| `~/.tmux/plugins/vim-tmux-navigator/` | Plugin |
-| `~/.tmux/plugins/tmux-yank/` | Plugin |
-| `~/.tmux/plugins/tmux-resurrect/` | Plugin |
-| `~/.tmux/plugins/tmux-continuum/` | Plugin |
+## Generated Template
+
+Written only when `~/.tmux.conf` is absent:
+
+```tmux
+# ─── General ───
+set -g extended-keys on
+set -g extended-keys-format csi-u
+set -g mouse on
+set -g history-limit 100000
+
+# ─── Clipboard ───
+# chosen for this machine
+```
+
+## Clipboard Handling
+
+The bound command is **probed, never assumed**, because a hardcoded one fails silently elsewhere:
+
+| Environment | Binding written |
+|-------------|-----------------|
+| Linux + Wayland + `wl-copy` | `copy-pipe-and-cancel "wl-copy"` |
+| Linux + X11 + `xclip` | `copy-pipe-and-cancel "xclip -selection clipboard"` |
+| macOS + `pbcopy` | `copy-pipe-and-cancel "pbcopy"` |
+| Headless (VPS / SSH) | no binding; `set -g set-clipboard on` (OSC 52) instead |
+
+**The headless branch matters.** A server has no display server, so a binding that shells out to `wl-copy` or `xclip` would just fail at copy time. OSC 52 uses terminal escape sequences instead and works over SSH with any terminal that supports it (kitty, Konsole, WezTerm, iTerm2, Ghostty, ...).
+
+## Existing Configuration
+
+If `~/.tmux.conf` or `~/.config/tmux/tmux.conf` already exists, the script performs a baseline check (`extended-keys`, `mouse`, `history-limit`, `clipboard`) and compares your file with the recommended baseline for your system:
+
+1. **Exact match**: reports that the file already matches recommended baseline;
+2. **Differences found**: renders a colorized Unified Diff via `git diff`;
+3. **Decision flow**:
+   - **Interactive TTY**: presents an interactive prompt:
+     - `[k] Keep` (default): keeps existing file untouched;
+     - `[o] Overwrite`: creates a backup under `~/.local/share/rig/backups/user/`, then writes the recommended baseline;
+     - `[a] Append`: creates the centralized backup, then appends baseline settings to the end of the file;
+     - `[d] Diff`: prints the colorized diff again.
+   - **Non-interactive (CI / pipe)**: safely falls back to `Keep` and prints checklist advice.
+
+### Clipboard advisory
+
+If the config calls a command that is not installed here, it says so plainly:
+
+```
+  note: ~/.tmux.conf calls 'pbcopy', which is not installed here.
+        pbcopy is macOS-only — that binding does nothing on Fedora.
+        Or drop the binding and use: set -g set-clipboard on (OSC 52).
+```
+
+Comment lines are ignored, so a commented-out entry is never mistaken for an active one.
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TMUX_KEYBINDS` | `0` | Enable custom keybindings (`1` to enable) |
-| `TMUX_MOUSE` | `1` | Enable mouse support (`0` to disable) |
-| `TMUX_STATUS_POS` | `top` | Status bar position (`top` or `bottom`) |
-| `GH_PROXY` | _(empty)_ | GitHub proxy URL for git clone |
+| `TMUX_MOUSE` | `1` | Set to `0` to omit `set -g mouse on` |
+| `TMUX_HISTORY_LIMIT` | `100000` | Scrollback buffer size |
 
-## Re-run Behavior
+## Re-run Behaviour
 
-- tmux binary: skipped if `tmux` command exists.
-- TPM: skipped if `~/.tmux/plugins/tpm` directory exists.
-- Config: regenerated and compared; written only if content differs.
-- Plugins: each skipped if its directory exists.
+Fully idempotent. Already-installed packages are skipped, existing configurations are preserved by default, and any write operation requires interactive confirmation with an automatic timestamped backup.
 
 ## Dependencies
 
-- `sudo` access (for apt).
-- `git` (for cloning TPM and plugins).
+- `sudo` on Linux for package installation
+- No network access required (nothing is downloaded)
 
-## Post-Install
+## Notes
 
-Start a new tmux session: `tmux` or `tmux new -s work`. To reload config in an existing session: `tmux source ~/.tmux.conf`.
-
-To manage plugins later: `Prefix + I` installs new plugins, `Prefix + U` updates plugins.
+- tmux 3.1+ prefers `$XDG_CONFIG_HOME/tmux/tmux.conf` and falls back to `~/.tmux.conf`. Either one counts as "you already have a config".
+- `set -g extended-keys on` with `csi-u` lets programs like Neovim receive full modifier combinations.

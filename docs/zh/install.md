@@ -15,7 +15,7 @@
 有终端且未使用 `--all`/`--components` 时，显示复选框菜单：
 
 ```
-  > [x] Shell Environment        zsh, Oh My Zsh, plugins, Starship           [sudo]
+  > [x] Shell Environment        zsh + Starship, no Oh My Zsh                [sudo]
     [ ] Tmux                     tmux + Catppuccin + TPM plugins              [sudo]
     [x] Node.js (nvm)            nvm + Node.js 24
     ...
@@ -26,17 +26,35 @@
 ### 非交互式
 
 - `--all` — 选择全部组件。
-- `--components shell,node,docker` — 按 ID 选择指定组件。
+- `--components shell,containers,node` — 按 ID 选择指定组件。
 
-通过管道（`curl | bash`）且无标志时，脚本会退出并给出用法提示。
+通过管道（`curl | bash`）、无标志、且未配置 `RIG_COMPONENTS` 时，脚本会退出并给出用法提示。
+
+### 从配置文件读取
+
+`~/.config/rig/config` 中声明的组件列表，会在命令行未指定选择时作为默认选择：
+
+```bash
+# ~/.config/rig/config
+RIG_COMPONENTS="
+shell
+tmux
+git
+containers
+"
+```
+
+此时裸执行 `rig install` 就会非交互地精确安装这些组件。值也可以写成单行 —— 逗号、空格和换行都算分隔符。命令行上的 `--all`、`--components`、`--preset` 优先级更高。
+
+该文件是**解析**的，不会被 source，且只读取这几个键：`RIG_COMPONENTS`、`RIG_PROFILE`、`RIG_CONTAINER_ENGINE`、`RIG_CONTAINER_MODE`。同名环境变量可在单次运行时覆盖它。
 
 ## 执行流程
 
 1. **解析参数** — `--all`、`--components`、`--gh-proxy`、`--verbose`。
 2. **显示 TUI**（交互）或验证选择（非交互）。
-3. **解析依赖** — 自动添加缺失的依赖（如选择 Claude Code 会自动添加 Node.js）。
+3. **解析依赖** — 自动添加注册表中声明的缺失依赖。目前没有组件声明依赖，机制保留给未来的组件。
 4. **展示计划** — 按安装顺序列出组件，带标签（`sudo`、`key`、`install only`）。
-5. **收集 API 密钥** — 交互模式下提示输入 API URL/Key（密钥用 `*` 遮掩）；非交互模式下读取环境变量。缺失密钥则标记为「仅安装」。
+5. **收集凭据** — 需要令牌的组件（目前只有 Tailscale）会在交互模式下提示输入（用 `*` 遮掩）；非交互模式下读取环境变量。缺失则标记为「仅安装」。
 6. **缓存 sudo** — 如有组件需要 sudo，预先认证并在后台保持活跃。
 7. **下载脚本** — 将所需的 `setup-*.sh` 下载到临时目录（快速失败：所有下载必须成功才开始执行）。
 8. **执行** — 按序运行。默认显示 spinner，`--verbose` 模式显示原始输出。
@@ -44,21 +62,16 @@
 
 ## 依赖解析
 
-| 组件 | 依赖 |
-|------|------|
-| Claude Code | Node.js |
-| Codex CLI | Node.js |
-| Gemini CLI | Node.js |
-| Agent Skills | Node.js |
+注册表中带有每组件的依赖列表（`COMP_DEPS`），依赖会自动添加并优先安装。**目前没有任何组件声明依赖**，因此当前不会自动添加任何东西。
 
-依赖会自动添加并优先安装。安装顺序按组件注册表的数组索引排列。
+安装顺序按组件注册表的数组索引排列。
 
-## API 密钥处理
+## 凭据处理
 
-针对 AI 代理组件（Claude Code、Codex、Gemini）：
+只有 Tailscale 需要凭据（auth key，仅令牌）：
 
-- **有环境变量**（`CLAUDE_API_URL` + `CLAUDE_API_KEY`）— 安装工具并写入配置。
-- **无环境变量** — 交互模式下提示输入（留空则标记「仅安装」）。
+- **有环境变量**（`TAILSCALE_AUTH_KEY`）— 安装并自动连接。
+- **无环境变量** — 交互模式下提示输入（用 `*` 遮掩）；留空则标记「仅安装」。
 - **仅安装** — 安装工具但不配置。汇总中会提示需要设置的环境变量。
 
 ## 错误处理
@@ -72,12 +85,7 @@
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `GH_PROXY` | _（空）_ | GitHub 代理 URL 前缀 |
-| `CLAUDE_API_URL` | _（空）_ | Claude Code 的 API 基础地址 |
-| `CLAUDE_API_KEY` | _（空）_ | Claude Code 的 API 密钥 |
-| `CODEX_API_URL` | _（空）_ | Codex CLI 的 API 基础地址 |
-| `CODEX_API_KEY` | _（空）_ | Codex CLI 的 API 密钥 |
-| `GEMINI_API_URL` | _（空）_ | Gemini CLI 的 API 基础地址 |
-| `GEMINI_API_KEY` | _（空）_ | Gemini CLI 的 API 密钥 |
+| `TAILSCALE_AUTH_KEY` | _（空）_ | Tailscale 自动连接的 auth key |
 
 各脚本自身的环境变量同样生效（如 `NODE_VERSION`、`DOCKER_MIRROR`）。
 

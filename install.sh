@@ -3,13 +3,13 @@ set -uo pipefail
 
 # =============================================================================
 # Rig All-in-One Installer
-# https://github.com/X-Zero-L/rig
+# https://github.com/DieRingedesSaturn/rig
 #
 # Usage:
 #   bash install.sh                              # Interactive TUI
 #   bash install.sh --all                        # Install everything
 #   bash install.sh --preset agent               # Install a preset bundle
-#   bash install.sh --components shell,node,docker
+#   bash install.sh --components shell,node,containers
 #   bash install.sh update                       # Update installed components
 #   bash install.sh update --all                 # Non-interactive update
 #   curl -fsSL <url>/install.sh | bash           # Interactive via pipe
@@ -17,12 +17,7 @@ set -uo pipefail
 #
 # Environment variables:
 #   GH_PROXY          - GitHub proxy URL (e.g. https://gh-proxy.org)
-#   CLAUDE_API_URL    - API URL for Claude Code
-#   CLAUDE_API_KEY    - API key for Claude Code
-#   CODEX_API_URL     - API URL for Codex CLI
-#   CODEX_API_KEY     - API key for Codex CLI
-#   GEMINI_API_URL    - API URL for Gemini CLI
-#   GEMINI_API_KEY    - API key for Gemini CLI
+#   TAILSCALE_AUTH_KEY - Auth key for Tailscale auto-connect
 # =============================================================================
 
 # --- [A] Constants -----------------------------------------------------------
@@ -30,7 +25,7 @@ set -uo pipefail
 # Prevent gh-proxy.org from rewriting these URLs in proxied content
 _GH="github.com"
 _RAW="raw.githubusercontent.com"
-REPO="X-Zero-L/rig"
+REPO="DieRingedesSaturn/rig"
 BRANCH="master"
 BASE_URL="https://${_RAW}/${REPO}/${BRANCH}"
 
@@ -38,6 +33,7 @@ export GH_PROXY="${GH_PROXY:-}"
 NON_INTERACTIVE=0
 INTERACTIVE=0
 VERBOSE=0
+DRY_RUN=0
 TMPDIR_INSTALL=""
 LOG_FILE=""
 CURSOR_HIDDEN=0
@@ -45,8 +41,7 @@ CURSOR_HIDDEN=0
 # --- [A1] OS Detection -------------------------------------------------------
 
 # Source OS detection library if available locally, otherwise download
-_SCRIPT_DIR="${BASH_SOURCE[0]:-}"
-_SCRIPT_DIR="${_SCRIPT_DIR%/*}"
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -n "$_SCRIPT_DIR" && -f "${_SCRIPT_DIR}/lib/os-detect.sh" ]]; then
     # shellcheck disable=SC1091
     source "${_SCRIPT_DIR}/lib/os-detect.sh"
@@ -61,6 +56,23 @@ else
     # shellcheck disable=SC1090
     [[ -s "$_os_detect_tmp" ]] && source "$_os_detect_tmp"
     rm -f "$_os_detect_tmp"
+fi
+
+# Config file support (~/.config/rig/config). Only rig-config.sh is needed here;
+# it has no dependencies on the other libraries.
+if [[ -n "$_SCRIPT_DIR" && -f "${_SCRIPT_DIR}/lib/rig-config.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "${_SCRIPT_DIR}/lib/rig-config.sh"
+else
+    _rig_config_tmp=$(mktemp)
+    if [[ -n "$GH_PROXY" ]]; then
+        curl -fsSL "${GH_PROXY%/}/${BASE_URL}/lib/rig-config.sh" -o "$_rig_config_tmp" 2>/dev/null || true
+    else
+        curl -fsSL "${BASE_URL}/lib/rig-config.sh" -o "$_rig_config_tmp" 2>/dev/null || true
+    fi
+    # shellcheck disable=SC1090
+    [[ -s "$_rig_config_tmp" ]] && source "$_rig_config_tmp"
+    rm -f "$_rig_config_tmp"
 fi
 
 # Restore shell options: lib files set -euo pipefail but install.sh must NOT use errexit
@@ -108,40 +120,34 @@ setup_colors() {
 
 # --- [C] Component Registry --------------------------------------------------
 
-COMP_IDS=(shell tmux git tools node uv go docker tailscale ssh claude-code codex gemini skills)
+COMP_IDS=(shell tmux git tools neovim node uv containers tailscale ssh security)
 
 COMP_NAMES=(
     "Shell Environment"
     "Tmux"
     "Git"
     "Essential Tools"
+    "Neovim"
     "Node.js (nvm)"
     "uv + Python"
-    "Go (goenv)"
-    "Docker"
+    "Containers"
     "Tailscale"
     "SSH"
-    "Claude Code"
-    "Codex CLI"
-    "Gemini CLI"
-    "Agent Skills"
+    "Security Baseline"
 )
 
 COMP_DESCS=(
-    "zsh, Oh My Zsh, plugins, Starship"
-    "tmux + Catppuccin + TPM plugins"
+    "zsh + Starship, no Oh My Zsh"
+    "tmux + mouse, large scrollback"
     "user.name + user.email + defaults"
     "rg, jq, fd, bat, gh, build tools"
+    "modern Lua config + default editor"
     "nvm + Node.js 24"
     "uv package manager"
-    "goenv + Go"
-    "Docker Engine + Compose + mirrors"
+    "Podman or Docker, rootless"
     "Tailscale VPN mesh network"
-    "SSH port + key-only + GitHub proxy"
-    "Claude Code CLI"
-    "OpenAI Codex CLI"
-    "Gemini CLI"
-    "Skills for all coding agents"
+    "OpenSSH server + keys + GitHub proxy"
+    "Firewall, SSH hardening, port audit"
 )
 
 COMP_SCRIPTS=(
@@ -149,58 +155,56 @@ COMP_SCRIPTS=(
     setup-tmux.sh
     setup-git.sh
     setup-tools.sh
+    setup-neovim.sh
     setup-node.sh
     setup-uv.sh
-    setup-go.sh
-    setup-docker.sh
+    setup-containers.sh
     setup-tailscale.sh
     setup-ssh.sh
-    setup-claude-code.sh
-    setup-codex.sh
-    setup-gemini.sh
-    setup-skills.sh
+    setup-security.sh
 )
 
 # Dependencies: space-separated indices that must run first (empty = none)
-COMP_DEPS=("" "" "" "" "" "" "" "" "" "" "4" "4" "4" "4")
+COMP_DEPS=("" "" "" "" "" "" "" "" "" "" "9")
 
 # Whether component needs API keys (2 = token-only, 1 = url+key)
-COMP_NEEDS_KEYS=(0 0 0 0 0 0 0 0 2 0 1 1 1 0)
+COMP_NEEDS_KEYS=(0 0 0 0 0 0 0 0 2 0 0)
 
 # Whether component needs sudo (dynamically set based on OS)
 _init_sudo_needs() {
     # macOS with Homebrew doesn't need sudo for most components
     if is_macos; then
-        COMP_NEEDS_SUDO=(0 0 0 0 0 0 0 1 1 1 0 0 0 0)
-        # shell, tmux, git, tools, node, uv, go: no sudo (brew installs to user dir)
-        # docker, tailscale, ssh: still need sudo (system-level services)
-        # claude-code, codex, gemini, skills: no sudo (npm global or user install)
+        COMP_NEEDS_SUDO=(0 0 0 0 0 0 0 1 1 1 1)
+        # shell, tmux, git, tools, neovim, node, uv: no sudo (brew installs to user dir)
+        # containers, tailscale, ssh, security: still need sudo (system-level services)
     else
         # Linux: original behavior
-        COMP_NEEDS_SUDO=(1 1 0 1 0 0 0 1 1 1 0 0 0 0)
+        COMP_NEEDS_SUDO=(1 1 0 1 1 0 0 1 1 1 1)
     fi
 }
 _init_sudo_needs
 
 # Selection state
-COMP_SELECTED=(0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+COMP_SELECTED=(0 0 0 0 0 0 0 0 0 0 0)
 
 # Install-only mode: tool installed but API not configured (keys missing)
-COMP_INSTALL_ONLY=(0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+COMP_INSTALL_ONLY=(0 0 0 0 0 0 0 0 0 0 0)
 
 # --- Preset Definitions (parallel arrays, bash 3.2 compatible) ---------------
 
-PRESET_ORDER=(minimal agent devops fullstack)
+PRESET_ORDER=(minimal agent devops vps fullstack)
 PRESET_COMPS=(
     "shell tools git"
-    "shell tools git node claude-code codex gemini skills"
-    "shell tools git node go docker tailscale ssh"
-    "shell tmux git tools node uv go docker ssh claude-code codex gemini skills"
+    "shell tools git neovim node"
+    "shell tools git node containers tailscale ssh"
+    "shell git tools neovim containers tailscale ssh security"
+    "shell tmux git tools neovim node uv containers ssh security"
 )
 PRESET_DESCS=(
     "Shell, tools, git — lightweight baseline"
-    "AI coding agents with Node.js runtime"
-    "Containers, networking, and Go toolchain"
+    "Shell, tools, git + Neovim + Node.js runtime"
+    "Containers, networking, and SSH"
+    "VPS server baseline with security hardening & firewall"
     "Complete development environment"
 )
 
@@ -284,7 +288,7 @@ print_banner() {
     printf "\n"
     printf "  ${CYAN}${BOLD}┌──────────────────────────────────────────┐${NC}\n"
     printf "  ${CYAN}${BOLD}│${NC}  ${BOLD}${WHITE}Rig Installer${NC}                           ${CYAN}${BOLD}│${NC}\n"
-    printf "  ${CYAN}${BOLD}│${NC}  ${DIM}${_GH}/${REPO}${NC}                 ${CYAN}${BOLD}│${NC}\n"
+    printf "  ${CYAN}${BOLD}│${NC}  ${DIM}${_GH}/${REPO}${NC}        ${CYAN}${BOLD}│${NC}\n"
     printf "  ${CYAN}${BOLD}└──────────────────────────────────────────┘${NC}\n"
     printf "\n"
 }
@@ -306,11 +310,13 @@ Options:
   --all                  Install all components
   --preset NAME          Install a preset bundle:
                          minimal    Shell, tools, git
-                         agent      AI coding agents with Node.js
-                         devops     Containers, networking, Go
+                         agent      Shell, tools, git + Node.js
+                         devops     Containers, networking, and SSH
+                         vps        VPS server baseline with security & firewall
                          fullstack  Complete development environment
   --components LIST      Comma-separated component list:
-                         shell,tmux,git,tools,node,uv,go,docker,tailscale,ssh,claude-code,codex,gemini,skills
+                         shell,tmux,git,tools,neovim,node,uv,containers,tailscale,ssh,security
+  --dry-run              Print the resolved plan without changing the system
   --gh-proxy URL         GitHub proxy URL (e.g., https://gh-proxy.org)
   -v, --verbose          Show raw script output (default: clean spinner)
   -h, --help             Show this help
@@ -318,15 +324,19 @@ Options:
 Environment variables:
   GH_PROXY               Same as --gh-proxy
   TAILSCALE_AUTH_KEY     Auth key for Tailscale auto-connect
-  CLAUDE_API_URL/KEY     API credentials for Claude Code
-  CODEX_API_URL/KEY      API credentials for Codex CLI
-  GEMINI_API_URL/KEY     API credentials for Gemini CLI
+
+Config file (~/.config/rig/config):
+  RIG_COMPONENTS         Default component list, used when no --all/--components/
+                         --preset is given, e.g. RIG_COMPONENTS="shell tmux containers"
+  RIG_PROFILE            'desktop' or 'vps' — picked up by the containers component
+  RIG_CONTAINER_ENGINE   'auto', 'podman' or 'docker'
+  RIG_CONTAINER_MODE     'rootless' or 'rootful'
 
 Examples:
   bash install.sh                                    # Interactive
   bash install.sh --all                              # Install everything
   bash install.sh --preset agent                     # Install a preset bundle
-  bash install.sh --components shell,node,docker     # Specific components
+  bash install.sh --components shell,node,containers # Specific components
   bash install.sh --all --gh-proxy https://gh-proxy.org
   bash install.sh update                             # Update installed components
   bash install.sh update --all                       # Non-interactive update
@@ -342,14 +352,23 @@ download_script() {
     local target="${TMPDIR_INSTALL}/${script_name}"
     local url
 
+    [[ -s "$target" ]] && return 0
+
+    # If running from a local clone or checkout, copy directly from local disk
+    if [[ -n "${_SCRIPT_DIR:-}" && -f "${_SCRIPT_DIR}/${script_name}" ]]; then
+        mkdir -p "$(dirname "$target")"
+        cp "${_SCRIPT_DIR}/${script_name}" "$target"
+        chmod +x "$target"
+        return 0
+    fi
+
     if [[ -n "$GH_PROXY" ]]; then
         url="${GH_PROXY%/}/${BASE_URL}/${script_name}"
     else
         url="${BASE_URL}/${script_name}"
     fi
 
-    [[ -s "$target" ]] && return 0
-
+    mkdir -p "$(dirname "$target")"
     if curl -fsSL --retry 3 --retry-delay 2 --retry-all-errors -o "$target" "$url"; then
         chmod +x "$target"
         return 0
@@ -366,7 +385,8 @@ download_all_needed() {
 
     # Ensure lib/ directory exists for setup scripts to source
     mkdir -p "${TMPDIR_INSTALL}/lib"
-    for lib_file in os-detect.sh pkg-maps.sh pkg-manager.sh; do
+    for lib_file in os-detect.sh pkg-maps.sh pkg-manager.sh rig-config.sh \
+                    containers.sh podman.sh docker.sh tools.sh firewall.sh security.sh backup.sh; do
         download_script "lib/${lib_file}" 2>/dev/null || true
     done
 
@@ -650,6 +670,9 @@ show_preset_menu() {
 
     # Apply preset or fall through to custom
     if [[ $cursor -lt $total ]]; then
+        if [[ "${PRESET_ORDER[$cursor]}" == "vps" && -z "${RIG_PROFILE:-}" ]]; then
+            export RIG_PROFILE="vps"
+        fi
         for comp_id in ${PRESET_COMPS[$cursor]}; do
             for i in "${!COMP_IDS[@]}"; do
                 if [[ "${COMP_IDS[$i]}" == "$comp_id" ]]; then
@@ -738,9 +761,6 @@ get_env_names() {
     local idx=$1
     case "${COMP_IDS[$idx]}" in
         tailscale)   ENV_URL_NAME="";               ENV_KEY_NAME="TAILSCALE_AUTH_KEY" ;;
-        claude-code) ENV_URL_NAME="CLAUDE_API_URL"; ENV_KEY_NAME="CLAUDE_API_KEY" ;;
-        codex)       ENV_URL_NAME="CODEX_API_URL";  ENV_KEY_NAME="CODEX_API_KEY" ;;
-        gemini)      ENV_URL_NAME="GEMINI_API_URL"; ENV_KEY_NAME="GEMINI_API_KEY" ;;
     esac
 }
 
@@ -864,12 +884,6 @@ load_env() {
     fi
     # Add uv to PATH
     [[ -d "$HOME/.local/bin" ]] && export PATH="$HOME/.local/bin:$PATH"
-    # Load goenv if available
-    if [[ -d "$HOME/.goenv" ]]; then
-        export GOENV_ROOT="$HOME/.goenv"
-        export PATH="$GOENV_ROOT/bin:$PATH"
-        eval "$(goenv init -)" 2>/dev/null || true
-    fi
 }
 
 run_component() {
@@ -894,8 +908,17 @@ run_component() {
         return 1
     fi
 
-    if [[ "$VERBOSE" -eq 1 ]]; then
-        # Verbose: show raw output
+    local needs_visible_tty=0
+    if [[ -t 0 ]]; then
+        case "${COMP_IDS[$idx]}" in
+            tmux|containers|security) needs_visible_tty=1 ;;
+        esac
+    fi
+
+    if [[ "$VERBOSE" -eq 1 || "$needs_visible_tty" -eq 1 ]]; then
+        # Show raw output for verbose runs and for components that may ask the
+        # user a question. Hiding those prompts behind the spinner deadlocks an
+        # otherwise interactive apply.
         printf "\n"
         printf "  ${BOLD}${CYAN}[%d/%d]${NC} ${BOLD}${WHITE}%s${NC}\n" "$step" "$total" "${COMP_NAMES[$idx]}"
         printf "  ${CYAN}────────────────────────────────────────${NC}\n"
@@ -1012,7 +1035,7 @@ run_all_selected() {
                 has_shell=1
                 needs_reload=1
                 ;;
-            node|uv|go|tmux|claude-code|codex|gemini|skills)
+            node|uv|go|tmux)
                 needs_reload=1
                 ;;
         esac
@@ -1134,6 +1157,9 @@ parse_args() {
                         fi
                     done
                 done
+                if [[ "$preset_name" == "vps" && -z "${RIG_PROFILE:-}" ]]; then
+                    export RIG_PROFILE="vps"
+                fi
                 NON_INTERACTIVE=1
                 shift 2
                 ;;
@@ -1142,15 +1168,7 @@ parse_args() {
                     echo "error: --components requires an argument" >&2
                     exit 1
                 fi
-                IFS=',' read -ra REQUESTED <<< "$2"
-                for req in "${REQUESTED[@]}"; do
-                    req=$(echo "$req" | tr -d ' ')
-                    for i in "${!COMP_IDS[@]}"; do
-                        if [[ "${COMP_IDS[$i]}" == "$req" ]]; then
-                            COMP_SELECTED[$i]=1
-                        fi
-                    done
-                done
+                select_components_by_id "$2"
                 NON_INTERACTIVE=1
                 shift 2
                 ;;
@@ -1164,6 +1182,11 @@ parse_args() {
                 ;;
             --verbose|-v)
                 VERBOSE=1
+                shift
+                ;;
+            --dry-run)
+                DRY_RUN=1
+                NON_INTERACTIVE=1
                 shift
                 ;;
             --help|-h)
@@ -1189,6 +1212,57 @@ parse_args() {
     done
 }
 
+# --- [I] Component Selection Helpers -----------------------------------------
+
+# select_components_by_id <space or comma separated IDs>
+# Marks every recognised ID as selected. Unknown IDs are reported, not fatal.
+select_components_by_id() {
+    local list="${1//,/ }"
+    local req found i
+    for req in $list; do
+        [[ -z "$req" ]] && continue
+        found=0
+        for i in "${!COMP_IDS[@]}"; do
+            if [[ "${COMP_IDS[$i]}" == "$req" ]]; then
+                COMP_SELECTED[$i]=1
+                found=1
+                break
+            fi
+        done
+        if [[ "$found" -eq 0 ]]; then
+            printf "  ${YELLOW}warning:${NC} unknown component '%s' (ignored)\n" "$req" >&2
+        fi
+    done
+}
+
+# any_component_selected - True when at least one component is already marked.
+any_component_selected() {
+    local s
+    for s in "${COMP_SELECTED[@]}"; do
+        [[ "$s" -eq 1 ]] && return 0
+    done
+    return 1
+}
+
+# apply_config_components - Fall back to RIG_COMPONENTS from ~/.config/rig/config
+# when the caller did not ask for anything specific. This is what makes a bare
+# `rig install` reproduce the component set the machine declares.
+apply_config_components() {
+    [[ "$NON_INTERACTIVE" -eq 1 ]] && return 0
+    if any_component_selected; then
+        return 0
+    fi
+
+    local configured
+    configured="$(rig_config_list RIG_COMPONENTS)"
+    [[ -n "$configured" ]] || return 0
+
+    printf "  ${DIM}Using RIG_COMPONENTS from %s${NC}\n" "$(rig_config_file)"
+    select_components_by_id "$configured"
+    NON_INTERACTIVE=1
+    return 0
+}
+
 # --- [J] Main ----------------------------------------------------------------
 
 main() {
@@ -1203,6 +1277,10 @@ main() {
     # Parse CLI arguments
     parse_args "$@"
 
+    # A component list declared in ~/.config/rig/config is the default selection
+    # when the command line did not specify one.
+    apply_config_components
+
     # Determine interactive mode
     if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
         if [[ -e /dev/tty ]]; then
@@ -1210,7 +1288,8 @@ main() {
         else
             echo "Error: No terminal available. Use --all or --components to specify what to install."
             echo "  Example: curl ... | bash -s -- --all"
-            echo "  Example: curl ... | bash -s -- --components shell,node,docker"
+            echo "  Example: curl ... | bash -s -- --components shell,containers,node"
+            echo "  Or declare RIG_COMPONENTS in $(rig_config_file)"
             exit 1
         fi
     fi
@@ -1245,6 +1324,34 @@ main() {
 
     # Show plan
     show_plan "$ordered"
+
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        printf "  ${BOLD}Resolved host state${NC}\n"
+        printf "  ${DIM}Platform:${NC} %s (%s, %s)\n" "$OS_DISTRO" "$OS_FAMILY" "$PKG_MANAGER"
+        local dry_profile dry_engine
+        dry_profile="$(rig_config_get RIG_PROFILE '')"
+        dry_engine="$(rig_config_get RIG_CONTAINER_ENGINE auto)"
+        printf "  ${DIM}Profile:${NC}  %s\n" "${dry_profile:-not set}"
+        local dry_reason="explicit configuration"
+        if [[ "$dry_engine" != "podman" && "$dry_engine" != "docker" ]]; then
+            if command -v podman >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
+                dry_engine="podman"
+                dry_reason="already installed; Docker will not be installed"
+            elif command -v docker >/dev/null 2>&1 && ! command -v podman >/dev/null 2>&1; then
+                dry_engine="docker"
+                dry_reason="already installed; Podman will not be installed"
+            elif [[ "$dry_profile" == "vps" ]]; then
+                dry_engine="docker"
+                dry_reason="profile default; interactive choice during apply"
+            else
+                dry_engine="podman"
+                dry_reason="profile/OS default; interactive choice during apply"
+            fi
+        fi
+        printf "  ${DIM}Container preference:${NC} %s (%s)\n" "$dry_engine" "$dry_reason"
+        printf "\n  ${GREEN}${BOLD}Dry run complete:${NC} no component scripts, package managers, sudo commands, or configuration writes were executed.\n\n"
+        return 0
+    fi
 
     # Confirm in interactive mode
     if [[ "$INTERACTIVE" -eq 1 ]]; then

@@ -10,26 +10,21 @@ All scripts automatically detect the operating system and use the appropriate pa
 
 | Component | Debian/Ubuntu | CentOS/RHEL | Fedora | Arch Linux | macOS |
 |-----------|---------------|-------------|--------|------------|-------|
-| Shell (zsh, Oh My Zsh, Starship) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Tmux | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Shell (zsh, Starship, plugins) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Tmux (environment-aware clipboard) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Git | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Essential Tools | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Clash Proxy | ✓ | ✓ | ✓ | ✓ | ✗ (Linux only) |
-| Docker | ✓ (Engine) | ✓ (Engine) | ✓ (Engine) | ✓ (Engine) | ✓ (Desktop) |
+| Neovim (modern single-file config) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Containers (Podman / Docker) | ✓ | ✓ | ✓ | ✓ | ✓ (Podman VM or Docker Desktop) |
 | Tailscale | ✓ | ✓ | ✓ | ✓ | ✓ |
-| SSH | ✓ | ✓ | ✓ | ✓ | ✓ (Remote Login) |
+| SSH (OpenSSH server & client) | ✓ | ✓ | ✓ | ✓ | ✓ (Remote Login) |
+| Security (Anti-Lockout & firewall) | ✓ | ✓ | ✓ | ✓ | — (Linux ufw/firewalld only) |
 | Node.js (nvm) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | uv + Python | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Go (goenv) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Claude Code | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Codex CLI | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Gemini CLI | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Agent Skills | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 **Notes:**
-- Docker on macOS uses Docker Desktop (installed via Homebrew) instead of Docker Engine
+- Containers defaults to Podman on Fedora/Arch and Docker on Debian/RHEL; see [setup-containers.md](setup-containers.md)
 - SSH on macOS configures Remote Login instead of the OpenSSH server via systemd
-- Clash proxy is only supported on Linux systems
 
 ## Scripts
 
@@ -38,13 +33,15 @@ All scripts automatically detect the operating system and use the appropriate pa
 | Script | Description |
 |--------|-------------|
 | [install.sh](install.md) | All-in-one interactive/non-interactive installer |
-| [setup-shell.sh](setup-shell.md) | zsh + Oh My Zsh + plugins + Starship |
-| [setup-tmux.sh](setup-tmux.md) | tmux + TPM + Catppuccin + mouse enhancements |
+| [setup-shell.sh](setup-shell.md) | zsh + Starship + plugins (no framework) |
+| [setup-tmux.sh](setup-tmux.md) | tmux + mouse + scrollback (Unified Diff & interactive resolution) |
 | [setup-git.sh](setup-git.md) | Git user identity + sensible defaults |
-| [setup-clash.sh](setup-clash.md) | Clash proxy with subscription management |
-| [setup-docker.sh](setup-docker.md) | Docker Engine + Compose + daemon configuration |
+| [setup-tools.sh](setup-tools.md) | Essential CLI toolchain (rg, jq, fd, bat, gh, etc.) |
+| [setup-neovim.sh](../setup-neovim.sh) | Neovim >= 0.9 modern config & default editor |
+| [setup-containers.sh](setup-containers.md) | Podman or Docker backend, rootless by default |
 | [setup-tailscale.sh](setup-tailscale.md) | Tailscale VPN mesh network |
-| [setup-ssh.sh](setup-ssh.md) | SSH port + key-only authentication |
+| [setup-ssh.sh](setup-ssh.md) | OpenSSH server installation, custom port, and key import |
+| [setup-security.sh](../setup-security.sh) | Security hardening core (Anti-Lockout, firewall, port audit) |
 
 ### Language Runtimes
 
@@ -52,16 +49,6 @@ All scripts automatically detect the operating system and use the appropriate pa
 |--------|-------------|
 | [setup-node.sh](setup-node.md) | nvm + Node.js |
 | [setup-uv.sh](setup-uv.md) | uv package manager + Python |
-| [setup-go.sh](setup-go.md) | goenv + Go |
-
-### AI Coding Agents
-
-| Script | Description |
-|--------|-------------|
-| [setup-claude-code.sh](setup-claude-code.md) | Claude Code CLI + API configuration |
-| [setup-codex.sh](setup-codex.md) | OpenAI Codex CLI + API configuration |
-| [setup-gemini.sh](setup-gemini.md) | Google Gemini CLI + API configuration |
-| [setup-skills.sh](setup-skills.md) | Agent skills for all coding agents |
 
 ### Management
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # =============================================================================
 # Package Name Mapping Library
-# https://github.com/X-Zero-L/rig
+# https://github.com/DieRingedesSaturn/rig
 #
 # Maps abstract (generic) package names to distro-specific package names.
 # Must be sourced after lib/os-detect.sh (needs OS_FAMILY).
@@ -95,9 +95,14 @@ _pkg_map_debian() {
         vim)            echo "vim" ;;
         zsh)            echo "zsh" ;;
         shellcheck)     echo "shellcheck" ;;
+        fastfetch)      echo "fastfetch" ;;
         xclip)         echo "xclip" ;;
+        wl-clipboard)   echo "wl-clipboard" ;;
         python3)        echo "python3" ;;
         python3-pip)    echo "python3-pip" ;;
+        starship)                echo "starship" ;;
+        zsh-autosuggestions)     echo "zsh-autosuggestions" ;;
+        zsh-syntax-highlighting) echo "zsh-syntax-highlighting" ;;
         *)              echo "$name" ;;
     esac
 }
@@ -120,9 +125,14 @@ _pkg_map_rhel() {
         vim)            echo "vim-enhanced" ;;
         zsh)            echo "zsh" ;;
         shellcheck)     echo "ShellCheck" ;;
+        fastfetch)      echo "fastfetch" ;;
         xclip)         echo "xclip" ;;
+        wl-clipboard)   echo "wl-clipboard" ;;
         python3)        echo "python3" ;;
         python3-pip)    echo "python3-pip" ;;
+        starship)                echo "starship" ;;
+        zsh-autosuggestions)     echo "zsh-autosuggestions" ;;
+        zsh-syntax-highlighting) echo "zsh-syntax-highlighting" ;;
         *)              echo "$name" ;;
     esac
 }
@@ -145,9 +155,14 @@ _pkg_map_fedora() {
         vim)            echo "vim-enhanced" ;;
         zsh)            echo "zsh" ;;
         shellcheck)     echo "ShellCheck" ;;
+        fastfetch)      echo "fastfetch" ;;
         xclip)         echo "xclip" ;;
+        wl-clipboard)   echo "wl-clipboard" ;;
         python3)        echo "python3" ;;
         python3-pip)    echo "python3-pip" ;;
+        starship)                echo "starship" ;;
+        zsh-autosuggestions)     echo "zsh-autosuggestions" ;;
+        zsh-syntax-highlighting) echo "zsh-syntax-highlighting" ;;
         *)              echo "$name" ;;
     esac
 }
@@ -170,9 +185,14 @@ _pkg_map_arch() {
         vim)            echo "vim" ;;
         zsh)            echo "zsh" ;;
         shellcheck)     echo "shellcheck" ;;
+        fastfetch)      echo "fastfetch" ;;
         xclip)         echo "xclip" ;;
+        wl-clipboard)   echo "wl-clipboard" ;;
         python3)        echo "python" ;;
         python3-pip)    echo "python-pip" ;;
+        starship)                echo "starship" ;;
+        zsh-autosuggestions)     echo "zsh-autosuggestions" ;;
+        zsh-syntax-highlighting) echo "zsh-syntax-highlighting" ;;
         *)              echo "$name" ;;
     esac
 }
@@ -195,9 +215,14 @@ _pkg_map_macos() {
         vim)            echo "vim" ;;
         zsh)            echo "" ;;  # built-in on macOS
         shellcheck)     echo "shellcheck" ;;
-        xclip)         echo "" ;;  # not applicable on macOS (use pbcopy)
+        fastfetch)      echo "fastfetch" ;;
+        xclip)         echo "" ;;  # not applicable on macOS (pbcopy is built in)
+        wl-clipboard)   echo "" ;;  # not applicable on macOS (pbcopy is built in)
         python3)        echo "python@3" ;;
         python3-pip)    echo "" ;;  # included with python@3 on brew
+        starship)                echo "starship" ;;
+        zsh-autosuggestions)     echo "zsh-autosuggestions" ;;
+        zsh-syntax-highlighting) echo "zsh-syntax-highlighting" ;;
         *)              echo "$name" ;;
     esac
 }

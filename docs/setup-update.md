@@ -16,7 +16,7 @@ bash update.sh
 bash update.sh --all
 
 # Selective
-bash update.sh --components codex,claude-code,node
+bash update.sh --components containers,node
 
 # Via install.sh dispatch
 bash install.sh update
@@ -30,11 +30,10 @@ bash install.sh update --all
 When run with a terminal available and no `--all`/`--components` flag, a checkbox menu appears showing **only installed components** (all selected by default):
 
 ```
-  ● Shell Environment         zsh, Oh My Zsh, plugins, Starship
+  ● Shell Environment         zsh + Starship, no Oh My Zsh
   ● Node.js (nvm)             nvm + Node.js 24
-  ● Claude Code               Claude Code CLI
-  ○ Codex CLI                 OpenAI Codex CLI           [sudo]
-  ● Gemini CLI                Gemini CLI
+  ● Containers                Podman or Docker, rootless
+  ○ Tailscale                 Tailscale VPN mesh network
 ```
 
 Controls: `↑↓` navigate, `Space` toggle, `a` toggle all, `Enter` confirm, `q` quit.
@@ -42,14 +41,14 @@ Controls: `↑↓` navigate, `Space` toggle, `a` toggle all, `Enter` confirm, `q
 ### Non-Interactive
 
 - `--all` — update all installed components.
-- `--components codex,claude-code` — update specific installed components by ID.
+- `--components containers,node` — update specific installed components by ID.
 
 If piped (`curl | bash`) without flags, the script exits with a usage hint.
 
 ## Execution Flow
 
 1. **Parse arguments** — `--all`, `--components`, `--gh-proxy`, `--verbose`.
-2. **Load environment** — sources nvm, goenv, uv PATH so detection works.
+2. **Load environment** — sources nvm and uv PATH so detection works.
 3. **Detect installed** — checks each component for presence.
 4. **Show TUI** (interactive) or validate selection (non-interactive).
 5. **Show plan** — lists selected components in order with `sudo` tags.
@@ -63,21 +62,15 @@ If piped (`curl | bash`) without flags, the script exits with a usage hint.
 
 | Component | What Gets Updated | Needs sudo |
 |-----------|-------------------|------------|
-| Shell Environment | Oh My Zsh, custom plugins/themes (git pull), Starship | No |
+| Shell Environment | zsh, Starship, plugins — all distro packages | No |
 | Tmux | `apt-get --only-upgrade tmux`, TPM plugins | Yes |
 | Git | `apt-get --only-upgrade git` | Yes |
 | Essential Tools | `apt-get --only-upgrade` rg, jq, fd, bat, tree, shellcheck, build-essential, gh | Yes |
-| Clash Proxy | `git pull` + re-run installer | Yes |
 | Node.js (nvm) | `nvm install node --reinstall-packages-from=current` | No |
 | uv + Python | `uv self update` | No |
-| Go (goenv) | `git pull` goenv, install latest Go version | No |
-| Docker | `apt-get --only-upgrade` docker packages | Yes |
+| Containers | upgrade the selected backend's packages (Podman, or Docker incl. rootless extras) | Yes |
 | Tailscale | `tailscale update` (fallback: apt) | Yes |
 | SSH | `apt-get --only-upgrade openssh-server` | Yes |
-| Claude Code | `npm install -g @anthropic-ai/claude-code@latest` | No |
-| Codex CLI | `npm install -g @openai/codex@latest` | No |
-| Gemini CLI | `npm install -g @google/gemini-cli@latest` | No |
-| Agent Skills | Re-run `npx skills add` for each skill repo | No |
 
 ## Detection Logic
 
@@ -85,21 +78,15 @@ Each component is detected by checking for installed artifacts:
 
 | Component | Detection Check |
 |-----------|----------------|
-| Shell | `~/.oh-my-zsh` directory exists |
+| Shell | `zsh` and `starship` commands available |
 | Tmux | `tmux` command available |
 | Git | `git` command available |
 | Essential Tools | `rg` and `jq` commands available |
-| Clash | `~/clash-for-linux` directory exists |
 | Node.js | `nvm` function or `~/.nvm/nvm.sh` exists |
 | uv | `uv` command available |
-| Go | `goenv` command or `~/.goenv/bin` exists |
-| Docker | `docker` command available |
+| Containers | `podman` or `docker` command available |
 | Tailscale | `tailscale` command available |
 | SSH | `/etc/ssh/sshd_config` exists |
-| Claude Code | `claude` command available |
-| Codex CLI | `codex` command available |
-| Gemini CLI | `gemini` command available |
-| Skills | `~/.local/share/skills` or `~/.claude/skills` exists |
 
 ## install.sh Integration
 
@@ -108,7 +95,7 @@ Each component is detected by checking for installed artifacts:
 ```bash
 bash install.sh update              # Interactive
 bash install.sh update --all        # Non-interactive
-bash install.sh update --components codex,claude-code
+bash install.sh update --components docker,node
 ```
 
 The `--gh-proxy` flag set before `update` applies to the download URL:
@@ -133,9 +120,8 @@ bash install.sh --gh-proxy https://gh-proxy.org update --all
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GH_PROXY` | _(empty)_ | GitHub proxy URL prefix (for Starship download, skills mirror) |
+| `GH_PROXY` | _(empty)_ | GitHub proxy URL prefix (for the Starship fallback download) |
 | `NODE_VERSION` | _(empty)_ | Pin Node.js version for update (default: latest) |
-| `SKILLS_NPM_MIRROR` | _(empty)_ | npm registry mirror for skills (auto-set when `GH_PROXY` is set) |
 
 ## Error Handling
 

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # =============================================================================
 # Rig Config Import
-# https://github.com/X-Zero-L/rig
+# https://github.com/DieRingedesSaturn/rig
 #
 # Imports configuration exported by export-config.sh and reinstalls components.
 #
@@ -19,10 +19,12 @@ set -euo pipefail
 
 # --- OS Detection ------------------------------------------------------------
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Source OS detection library if available
-if [[ -f "${BASH_SOURCE[0]%/*}/lib/os-detect.sh" ]]; then
+if [[ -f "$SCRIPT_DIR/lib/os-detect.sh" ]]; then
     # shellcheck disable=SC1091
-    source "${BASH_SOURCE[0]%/*}/lib/os-detect.sh"
+    source "$SCRIPT_DIR/lib/os-detect.sh"
 else
     # Minimal fallback
     is_debian() { [[ -f /etc/debian_version ]]; }
@@ -181,9 +183,8 @@ fi
 
 # Define supported component IDs (must match install.sh)
 SUPPORTED_COMPONENTS=(
-    "shell" "tmux" "git" "tools" "essential-tools"
-    "node" "uv" "go" "docker" "tailscale" "ssh"
-    "claude-code" "codex" "gemini" "skills"
+    "shell" "tmux" "git" "tools"
+    "neovim" "node" "uv" "containers" "tailscale" "ssh" "security"
 )
 
 # Validate each component ID
@@ -219,11 +220,28 @@ COMP_LIST=$(echo "$COMPONENTS" | paste -sd, -)
 GIT_USER_NAME=$(jq -r '.config.git.user_name // empty' "$CONFIG_FILE" 2>/dev/null || true)
 GIT_USER_EMAIL=$(jq -r '.config.git.user_email // empty' "$CONFIG_FILE" 2>/dev/null || true)
 
+# Extract container & system & security baseline config
+RIG_CONTAINER_ENGINE=$(jq -r '.config.containers.engine // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_CONTAINER_MODE=$(jq -r '.config.containers.mode // .config.system.container_mode // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_PROFILE=$(jq -r '.config.system.profile // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_FIREWALL=$(jq -r '.config.system.firewall // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_FIREWALL_DEFAULT_IN=$(jq -r '.config.system.firewall_default_in // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_FIREWALL_DEFAULT_OUT=$(jq -r '.config.system.firewall_default_out // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_PUBLIC_TCP=$(jq -r '.config.system.public_tcp // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_PUBLIC_UDP=$(jq -r '.config.system.public_udp // empty' "$CONFIG_FILE" 2>/dev/null || true)
+HAS_RIG_PUBLIC_TCP=$(jq -r 'if .config.system | has("public_tcp") then 1 else 0 end' "$CONFIG_FILE" 2>/dev/null || echo 0)
+HAS_RIG_PUBLIC_UDP=$(jq -r 'if .config.system | has("public_udp") then 1 else 0 end' "$CONFIG_FILE" 2>/dev/null || echo 0)
+RIG_SSH_PORT=$(jq -r '.config.system.ssh_port // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_SSH_ROOT_LOGIN=$(jq -r '.config.system.ssh_root_login // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_SSH_PASSWORD_AUTH=$(jq -r '.config.system.ssh_password_auth // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_SSH_PUBKEY_AUTH=$(jq -r '.config.system.ssh_pubkey_auth // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_SSH_ACCESS=$(jq -r '.config.system.ssh_access // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_ADMIN_USER=$(jq -r '.config.system.admin_user // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_CHECK_LISTENING_PORTS=$(jq -r '.config.system.check_listening_ports // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_WARN_UNDECLARED_PORTS=$(jq -r '.config.system.warn_undeclared_ports // empty' "$CONFIG_FILE" 2>/dev/null || true)
+
 # --- Load Secrets ------------------------------------------------------------
 
-CLAUDE_API_URL="" CLAUDE_API_KEY=""
-CODEX_API_URL="" CODEX_API_KEY=""
-GEMINI_API_URL="" GEMINI_API_KEY=""
 TAILSCALE_AUTH_KEY=""
 
 if [[ -n "$SECRETS_FILE" && -f "$SECRETS_FILE" ]]; then
@@ -235,12 +253,6 @@ if [[ -n "$SECRETS_FILE" && -f "$SECRETS_FILE" ]]; then
         # Trim whitespace
         key=$(echo "$key" | tr -d '[:space:]')
         case "$key" in
-            CLAUDE_API_URL)    CLAUDE_API_URL="$value" ;;
-            CLAUDE_API_KEY)    CLAUDE_API_KEY="$value" ;;
-            CODEX_API_URL)     CODEX_API_URL="$value" ;;
-            CODEX_API_KEY)     CODEX_API_KEY="$value" ;;
-            GEMINI_API_URL)    GEMINI_API_URL="$value" ;;
-            GEMINI_API_KEY)    GEMINI_API_KEY="$value" ;;
             TAILSCALE_AUTH_KEY) TAILSCALE_AUTH_KEY="$value" ;;
         esac
     done < "$SECRETS_FILE"
@@ -271,16 +283,8 @@ printf "\n"
 
 # Show detected API keys (masked)
 has_secrets=0
-if [[ -n "$CLAUDE_API_KEY" ]]; then
-    printf "  ${BOLD}Claude Code:${NC} API key ${GREEN}detected${NC}\n"
-    has_secrets=1
-fi
-if [[ -n "$CODEX_API_KEY" ]]; then
-    printf "  ${BOLD}Codex CLI:${NC}   API key ${GREEN}detected${NC}\n"
-    has_secrets=1
-fi
-if [[ -n "$GEMINI_API_KEY" ]]; then
-    printf "  ${BOLD}Gemini CLI:${NC}  API key ${GREEN}detected${NC}\n"
+if [[ -n "$TAILSCALE_AUTH_KEY" ]]; then
+    printf "  ${BOLD}Tailscale:${NC}   auth key ${GREEN}detected${NC}\n"
     has_secrets=1
 fi
 if [[ $has_secrets -eq 0 && -n "$SECRETS_FILE" ]]; then
@@ -305,6 +309,32 @@ if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
     printf "\n"
 fi
 
+# --- Persist Rig Config ------------------------------------------------------
+
+# Persist before changing unrelated user state. This also makes imported
+# values available to future `rig` commands, not only this installer process.
+if [[ -f "$SCRIPT_DIR/lib/rig-config.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/lib/rig-config.sh"
+    rig_config_set RIG_COMPONENTS "$COMP_LIST"
+    [[ -n "$RIG_PROFILE" ]] && rig_config_set RIG_PROFILE "$RIG_PROFILE"
+    [[ -n "$RIG_CONTAINER_ENGINE" ]] && rig_config_set RIG_CONTAINER_ENGINE "$RIG_CONTAINER_ENGINE"
+    [[ -n "$RIG_CONTAINER_MODE" ]] && rig_config_set RIG_CONTAINER_MODE "$RIG_CONTAINER_MODE"
+    [[ -n "$RIG_FIREWALL" ]] && rig_config_set RIG_FIREWALL "$RIG_FIREWALL"
+    [[ -n "$RIG_FIREWALL_DEFAULT_IN" ]] && rig_config_set RIG_FIREWALL_DEFAULT_IN "$RIG_FIREWALL_DEFAULT_IN"
+    [[ -n "$RIG_FIREWALL_DEFAULT_OUT" ]] && rig_config_set RIG_FIREWALL_DEFAULT_OUT "$RIG_FIREWALL_DEFAULT_OUT"
+    [[ "$HAS_RIG_PUBLIC_TCP" -eq 1 ]] && rig_config_set RIG_PUBLIC_TCP "$RIG_PUBLIC_TCP"
+    [[ "$HAS_RIG_PUBLIC_UDP" -eq 1 ]] && rig_config_set RIG_PUBLIC_UDP "$RIG_PUBLIC_UDP"
+    [[ -n "$RIG_SSH_PORT" ]] && rig_config_set RIG_SSH_PORT "$RIG_SSH_PORT"
+    [[ -n "$RIG_SSH_ROOT_LOGIN" ]] && rig_config_set RIG_SSH_ROOT_LOGIN "$RIG_SSH_ROOT_LOGIN"
+    [[ -n "$RIG_SSH_PASSWORD_AUTH" ]] && rig_config_set RIG_SSH_PASSWORD_AUTH "$RIG_SSH_PASSWORD_AUTH"
+    [[ -n "$RIG_SSH_PUBKEY_AUTH" ]] && rig_config_set RIG_SSH_PUBKEY_AUTH "$RIG_SSH_PUBKEY_AUTH"
+    [[ -n "$RIG_SSH_ACCESS" ]] && rig_config_set RIG_SSH_ACCESS "$RIG_SSH_ACCESS"
+    [[ -n "$RIG_ADMIN_USER" ]] && rig_config_set RIG_ADMIN_USER "$RIG_ADMIN_USER"
+    [[ -n "$RIG_CHECK_LISTENING_PORTS" ]] && rig_config_set RIG_CHECK_LISTENING_PORTS "$RIG_CHECK_LISTENING_PORTS"
+    [[ -n "$RIG_WARN_UNDECLARED_PORTS" ]] && rig_config_set RIG_WARN_UNDECLARED_PORTS "$RIG_WARN_UNDECLARED_PORTS"
+fi
+
 # --- Apply Git Config --------------------------------------------------------
 
 if [[ -n "$GIT_USER_NAME" || -n "$GIT_USER_EMAIL" ]]; then
@@ -326,7 +356,7 @@ fi
 
 # Build install.sh URL
 _RAW="raw.githubusercontent.com"
-REPO="X-Zero-L/rig"
+REPO="DieRingedesSaturn/rig"
 BRANCH="master"
 BASE_URL="https://${_RAW}/${REPO}/${BRANCH}"
 
@@ -337,13 +367,25 @@ fi
 
 # Export env vars for install.sh
 export GH_PROXY
-export CLAUDE_API_URL CLAUDE_API_KEY
-export CODEX_API_URL CODEX_API_KEY
-export GEMINI_API_URL GEMINI_API_KEY
 export TAILSCALE_AUTH_KEY
+[[ -n "$RIG_PROFILE" ]] && export RIG_PROFILE
+[[ -n "$RIG_CONTAINER_ENGINE" ]] && export RIG_CONTAINER_ENGINE
+[[ -n "$RIG_CONTAINER_MODE" ]] && export RIG_CONTAINER_MODE
+[[ -n "$RIG_FIREWALL" ]] && export RIG_FIREWALL
+[[ -n "$RIG_FIREWALL_DEFAULT_IN" ]] && export RIG_FIREWALL_DEFAULT_IN
+[[ -n "$RIG_FIREWALL_DEFAULT_OUT" ]] && export RIG_FIREWALL_DEFAULT_OUT
+[[ "$HAS_RIG_PUBLIC_TCP" -eq 1 ]] && export RIG_PUBLIC_TCP
+[[ "$HAS_RIG_PUBLIC_UDP" -eq 1 ]] && export RIG_PUBLIC_UDP
+[[ -n "$RIG_SSH_PORT" ]] && export RIG_SSH_PORT
+[[ -n "$RIG_SSH_ROOT_LOGIN" ]] && export RIG_SSH_ROOT_LOGIN
+[[ -n "$RIG_SSH_PASSWORD_AUTH" ]] && export RIG_SSH_PASSWORD_AUTH
+[[ -n "$RIG_SSH_PUBKEY_AUTH" ]] && export RIG_SSH_PUBKEY_AUTH
+[[ -n "$RIG_SSH_ACCESS" ]] && export RIG_SSH_ACCESS
+[[ -n "$RIG_ADMIN_USER" ]] && export RIG_ADMIN_USER
+[[ -n "$RIG_CHECK_LISTENING_PORTS" ]] && export RIG_CHECK_LISTENING_PORTS
+[[ -n "$RIG_WARN_UNDECLARED_PORTS" ]] && export RIG_WARN_UNDECLARED_PORTS
 
 # If running from local repo, use local install.sh
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "$SCRIPT_DIR/install.sh" ]]; then
     exec bash "$SCRIPT_DIR/install.sh" --components "$COMP_LIST"
 else

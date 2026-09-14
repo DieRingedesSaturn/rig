@@ -18,6 +18,7 @@
 | 编译工具 | `build-essential` (gcc, g++, make) | `gcc`, `gcc-c++`, `make` | `base-devel` | Xcode Command Line Tools |
 | wget | `wget` | `wget` | `wget` | `wget` |
 | unzip | `unzip` | `unzip` | `unzip` | `unzip` |
+| fastfetch | `fastfetch` | `fastfetch` | `fastfetch` | `fastfetch` |
 | 剪贴板 | `xclip` | `xclip` | `xclip` | `pbcopy` (内置) |
 
 **注意事项：**
@@ -29,7 +30,7 @@
 
 | 二进制 | 用途 |
 |--------|------|
-| `rg` | 快速代码搜索（Claude Code 内部使用） |
+| `rg` | 快速代码搜索 |
 | `jq` | JSON 处理 |
 | `fd` | 快速文件查找 |
 | `bat` | 语法高亮的 cat |
@@ -39,6 +40,7 @@
 | `gcc`, `g++`, `make` | 原生 npm 模块编译 |
 | `wget` | HTTP 下载 |
 | `unzip` | 解压缩 |
+| `fastfetch` | 快速现代化系统信息展示 |
 
 ## 执行方式
 
@@ -93,10 +95,36 @@ sudo apt-get install -y gh
 | `/etc/apt/keyrings/githubcli-archive-keyring.gpg` | GitHub CLI apt 签名密钥 |
 | `/etc/apt/sources.list.d/github-cli.list` | GitHub CLI apt 仓库 |
 
+## 剪贴板工具
+
+`xclip` 是 X11 程序：在 Wayland 上或没有显示器的服务器上它什么都做不了。无条件安装它、或者在状态检查里期待它，会让**配置完全正确的机器**永远显示一个缺口。所以这个工具由会话推导：
+
+| 会话 | 工具 | 包 |
+|------|------|-----|
+| macOS | `pbcopy` | 系统自带 |
+| Wayland（设置了 `WAYLAND_DISPLAY`） | `wl-copy` | `wl-clipboard` |
+| X11（设置了 `DISPLAY`，非 Wayland） | `xclip` | `xclip` |
+| 无头 —— 无显示服务器 | 无 | 不安装 |
+
+Wayland 的检测**先于** X11，因为 Wayland 会话通常仍会为 XWayland 导出 `DISPLAY`；先查 `DISPLAY` 会在 Wayland 桌面上错误地选中 `xclip`。
+
+特殊场景可覆盖：
+
+```bash
+RIG_CLIPBOARD_TOOL=auto      # 默认：自动检测
+RIG_CLIPBOARD_TOOL=xclip     # 强制
+RIG_CLIPBOARD_TOOL=none      # 从不安装
+```
+
+`status.sh` 使用同一套检测，因此只会期待当前会话真正适用的那个工具。
+
 ## 安装后
 
 验证所有工具可用：
 
 ```bash
-command -v rg jq fd bat tree gh shellcheck gcc wget unzip xclip
+command -v rg jq fd bat tree gh shellcheck gcc wget unzip
+# 再加上你当前会话的剪贴板工具（如果有）：
+command -v wl-copy   # Wayland
+command -v xclip     # X11
 ```

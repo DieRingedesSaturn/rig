@@ -1,124 +1,98 @@
 # setup-tmux.sh
 
-安装 tmux、TPM 插件管理器、Catppuccin 主题及常用插件，支持完整鼠标交互。
+安装 tmux，并且**仅在没有任何配置存在时**写入一份最小 `tmux.conf`：扩展按键、鼠标支持、大回滚缓冲，以及一个在**当前机器上真正可用**的剪贴板绑定。
 
-## 操作系统支持
+刻意**不是** tmux 框架安装器：没有 TPM、没有 Catppuccin、不做插件 git clone。配置就几行，一眼能读完。
 
-适用于所有支持的平台：
+## 设计契约
 
-| 操作系统 | 包管理器 | 需要 sudo |
-|---------|---------|----------|
-| Debian/Ubuntu | `apt` | ✓ |
-| CentOS/RHEL | `yum`/`dnf` | ✓ |
-| Fedora | `dnf` | ✓ |
-| Arch Linux | `pacman` | ✓ |
-| macOS | `brew` | 仅 Homebrew 操作 |
+| 路径 | 行为 |
+|------|------|
+| `~/.tmux.conf` | 存在则默认保留（提供 Diff 与交互式选择） |
+| `~/.config/tmux/tmux.conf` | 存在则默认保留（提供 Diff 与交互式选择） |
+| 其他 | 不触碰 |
+
+未得到明确交互授权时绝不擅自覆盖现有文件；选择覆写或追加时自动在 `~/.local/share/rig/backups/user/` 创建带时间戳的备份。
 
 ## 安装内容
 
-| 工具 | 来源 | 说明 |
-|------|------|------|
-| tmux | 包管理器 | 终端复用器 |
-| TPM | [tmux-plugins/tpm](https://github.com/tmux-plugins/tpm) | Tmux 插件管理器 |
-| tmux-sensible | [tmux-plugins/tmux-sensible](https://github.com/tmux-plugins/tmux-sensible) | 合理默认值（ESC 延迟修复、历史记录等） |
-| Catppuccin | [catppuccin/tmux](https://github.com/catppuccin/tmux) | Catppuccin Mocha 主题 |
-| vim-tmux-navigator | [christoomey/vim-tmux-navigator](https://github.com/christoomey/vim-tmux-navigator) | Ctrl+h/j/k/l 在 vim 和 tmux 分屏间无缝切换 |
-| tmux-yank | [tmux-plugins/tmux-yank](https://github.com/tmux-plugins/tmux-yank) | 系统剪贴板集成 |
-| tmux-resurrect | [tmux-plugins/tmux-resurrect](https://github.com/tmux-plugins/tmux-resurrect) | 保存和恢复会话 |
-| tmux-continuum | [tmux-plugins/tmux-continuum](https://github.com/tmux-plugins/tmux-continuum) | 自动保存会话（基于 resurrect） |
-
-## 生成的配置
-
-脚本生成 `~/.tmux.conf`，包含以下部分：
-
-### 基础设置
-
-- 256 色 + RGB 终端支持。
-- 窗口和面板从 1 开始编号（非 0）。
-- `renumber-windows on` — 关闭窗口后自动重新编号，不留空隙。
-- `detach-on-destroy off` — 销毁会话时切换到其他会话而非脱离。
-
-### 鼠标交互
-
-所有鼠标功能默认启用（`set -g mouse on`）：
-
-| 操作 | 效果 |
+| 工具 | 来源 |
 |------|------|
-| 左键点击 status bar 上的窗口标签 | 切换到该窗口 |
-| 左键点击 session 名（status bar 左侧） | 打开 session/窗口树形选择器 |
-| 右键点击面板区域 | 弹出菜单：分屏、缩放、交换、关闭 |
-| 右键点击 status bar 窗口标签 | 弹出菜单：重命名、新建窗口、关闭 |
-| 右键点击 session 名 | 弹出菜单：新建/重命名/关闭 session |
-| 双击面板 | 切换缩放（最大化/还原） |
-| 中键点击面板 | 粘贴 buffer |
-| 滚轮滚动 status bar | 前后切换窗口 |
-| 拖拽面板边框 | 调整面板大小 |
+| tmux | 包管理器（apt / dnf / yum / pacman / brew） |
 
-### 快捷导航
+**不装**：TPM、Catppuccin 主题、任何插件。这些在旧版脚本里会装 6 个插件并直接覆盖你的 `~/.tmux.conf`。
 
-以下快捷键无需 prefix：
+## 生成的模板
 
-| 按键 | 操作 |
-|------|------|
-| `Alt+1` .. `Alt+9` | 按编号切换窗口 |
-| `Alt+n` | 在当前目录新建窗口 |
+`~/.tmux.conf` 缺失时写入：
 
-### 自定义键位（可选）
+```tmux
+# ─── General ───
+set -g extended-keys on
+set -g extended-keys-format csi-u
+set -g mouse on
+set -g history-limit 100000
 
-默认禁用。通过 `TMUX_KEYBINDS=1` 启用：
+# ─── Clipboard ───
+# 按平台自动选择
+```
 
-| 按键 | 操作 | 替代原有 |
-|------|------|----------|
-| `Ctrl+a` | Prefix 键 | `Ctrl+b` |
-| `Prefix + \|` | 垂直分屏 | `Prefix + %` |
-| `Prefix + -` | 水平分屏 | `Prefix + "` |
-| `Prefix + H/J/K/L` | 调整面板大小（可重复） | — |
+## 剪贴板处理
 
-## 执行步骤
+绑定的命令**按机器实际情况探测**，因为写死一个命令会在别的环境里静默失效：
 
-| 步骤 | 操作 |
-|------|------|
-| 1/4 | 通过包管理器安装 tmux (apt/yum/dnf/pacman/brew) |
-| 2/4 | `git clone` TPM 到 `~/.tmux/plugins/tpm`（支持 `GH_PROXY`） |
-| 3/4 | 生成 `~/.tmux.conf` — 与现有内容比较，仅在不同时写入 |
-| 4/4 | 克隆各插件到 `~/.tmux/plugins/`（目录已存在则跳过） |
+| 环境 | 写入的绑定 |
+|------|-----------|
+| Linux + Wayland + `wl-copy` | `copy-pipe-and-cancel "wl-copy"` |
+| Linux + X11 + `xclip` | `copy-pipe-and-cancel "xclip -selection clipboard"` |
+| macOS + `pbcopy` | `copy-pipe-and-cancel "pbcopy"` |
+| 无显示器（VPS / SSH） | 不写绑定，改用 `set -g set-clipboard on`（OSC 52） |
 
-## 创建/修改的文件
+**无显示器这一支很重要。** 服务器没有显示服务器，绑定 `wl-copy` 或 `xclip` 只会在复制时报错。此时改用 OSC 52 转义序列，只要终端支持（kitty、Konsole、WezTerm、iTerm2、Ghostty 等）就能在 SSH 下正常复制。
 
-| 文件 | 说明 |
-|------|------|
-| `~/.tmux.conf` | 生成的配置 |
-| `~/.tmux/plugins/tpm/` | TPM 安装目录 |
-| `~/.tmux/plugins/tmux-sensible/` | 插件 |
-| `~/.tmux/plugins/tmux/` | Catppuccin 主题 |
-| `~/.tmux/plugins/vim-tmux-navigator/` | 插件 |
-| `~/.tmux/plugins/tmux-yank/` | 插件 |
-| `~/.tmux/plugins/tmux-resurrect/` | 插件 |
-| `~/.tmux/plugins/tmux-continuum/` | 插件 |
+## 已有配置的处理
+
+如果 `~/.tmux.conf` 或 `~/.config/tmux/tmux.conf` 已存在，脚本首先进行逐项关键配置检查（`extended-keys`、`mouse`、`history-limit`、`clipboard`），并比对现有文件与当前环境推荐 Baseline：
+
+1. **若配置完全一致**：直接提示匹配，不作任何改动；
+2. **若存在差异**：调用 `git diff` 输出彩色 Unified Diff；
+3. **决策分支**：
+   - **交互终端 (TTY)**：提示交互菜单：
+     - `[k] Keep`（默认）：保持现有配置不变；
+     - `[o] Overwrite`：先集中备份，再全量替换为推荐基线；
+     - `[a] Append`：先集中备份，再将推荐基线追加到文件末尾；
+     - `[d] Diff`：重新打印彩色 Diff。
+   - **非交互终端（管道 / CI）**：安全回退为 `Keep`，保持原有文件不变并输出缺失项提示。
+
+### 剪贴板可用性告警
+
+如果配置里调用了本机不存在的命令，会给出明确提示：
+
+```
+  note: ~/.tmux.conf calls 'pbcopy', which is not installed here.
+        pbcopy is macOS-only — that binding does nothing on Fedora.
+        Or drop the binding and use: set -g set-clipboard on (OSC 52).
+```
+
+注释行不会被误判为生效配置。
 
 ## 环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `TMUX_KEYBINDS` | `0` | 启用自定义键位（`1` 启用） |
-| `TMUX_MOUSE` | `1` | 启用鼠标支持（`0` 禁用） |
-| `TMUX_STATUS_POS` | `top` | 状态栏位置（`top` 或 `bottom`） |
-| `GH_PROXY` | _（空）_ | Git clone 的 GitHub 代理 URL |
+| `TMUX_MOUSE` | `1` | 设为 `0` 则不写 `set -g mouse on` |
+| `TMUX_HISTORY_LIMIT` | `100000` | 回滚缓冲行数 |
 
 ## 重复运行行为
 
-- tmux 二进制：`tmux` 命令存在则跳过。
-- TPM：`~/.tmux/plugins/tpm` 目录存在则跳过。
-- 配置：重新生成并比较内容，仅在内容不同时写入。
-- 插件：各插件目录存在则跳过。
+完全幂等安全。已装则跳过安装；已有配置默认安全保持不变，任何写入操作前均强制创建带时间戳备份。
 
 ## 依赖
 
-- `sudo` 权限（apt 安装）。
-- `git`（克隆 TPM 和插件）。
+- Linux 下装包需要 `sudo`
+- 无需网络（不下载任何东西）
 
-## 安装后
+## 备注
 
-启动新的 tmux 会话：`tmux` 或 `tmux new -s work`。在现有会话中重载配置：`tmux source ~/.tmux.conf`。
-
-后续管理插件：`Prefix + I` 安装新插件，`Prefix + U` 更新插件。
+- tmux 3.1+ 优先读取 `$XDG_CONFIG_HOME/tmux/tmux.conf`，回退到 `~/.tmux.conf`。两者任一存在都算"你已有配置"。
+- `set -g extended-keys on` 配合 `csi-u` 是为了让 Neovim 等程序能收到完整的修饰键组合。

@@ -9,10 +9,16 @@ source "$SCRIPT_DIR/lib/os-detect.sh"
 source "$SCRIPT_DIR/lib/pkg-maps.sh"
 # shellcheck source=lib/pkg-manager.sh
 source "$SCRIPT_DIR/lib/pkg-manager.sh"
+# shellcheck source=lib/rig-config.sh
+source "$SCRIPT_DIR/lib/rig-config.sh"
+# shellcheck source=lib/containers.sh
+source "$SCRIPT_DIR/lib/containers.sh"
+# shellcheck source=lib/backup.sh
+source "$SCRIPT_DIR/lib/backup.sh"
 
 # =============================================================================
 # Rig Component Uninstaller
-# https://github.com/X-Zero-L/rig
+# https://github.com/DieRingedesSaturn/rig
 #
 # Usage:
 #   bash uninstall.sh docker                     # Uninstall single component
@@ -39,7 +45,7 @@ YES_FLAG=0
 # Default to preserving data — require explicit flags to remove
 DOCKER_REMOVE_DATA=0
 SSH_REMOVE_KEYS=0
-CLAUDE_REMOVE_CONFIG=0
+NODE_KEEP_VERSIONS=0
 
 # --- [B] ANSI Colors ---------------------------------------------------------
 
@@ -64,48 +70,43 @@ setup_colors() {
 
 # --- [C] Component Registry --------------------------------------------------
 
-COMP_IDS=(shell tmux git tools essential-tools node uv go docker tailscale ssh claude-code codex gemini skills)
+COMP_IDS=(shell tmux git tools neovim node uv containers tailscale ssh security)
 
 COMP_NAMES=(
-    "Shell Environment" "Tmux" "Git" "CLI Tools" "Essential Tools"
-    "Node.js (nvm)" "uv + Python" "Go (goenv)" "Docker" "Tailscale"
-    "SSH" "Claude Code" "Codex CLI" "Gemini CLI" "Agent Skills"
+    "Shell Environment" "Tmux" "Git" "CLI Tools" "Neovim"
+    "Node.js (nvm)" "uv + Python" "Containers" "Tailscale"
+    "SSH" "Security Baseline"
 )
 
 COMP_DESCS=(
-    "zsh, Oh My Zsh, plugins, Starship"
-    "tmux + Catppuccin + TPM plugins"
+    "zsh + Starship, no Oh My Zsh"
+    "tmux package (config preserved)"
     "git package (config preserved)"
-    "rg, jq, fd, bat, tree, shellcheck"
-    "build-essential, wget, unzip, gh CLI"
+    "rg, jq, fd, bat, tree, shellcheck, gh, build tools"
+    "Neovim editor + config"
     "nvm + Node.js"
     "uv package manager + managed pythons"
-    "goenv + Go versions"
-    "Docker Engine + Compose + data"
+    "Podman or Docker + images/volumes"
     "Tailscale VPN"
     "SSH keys + sshd config"
-    "Claude Code CLI + ~/.claude"
-    "Codex CLI + ~/.codex"
-    "Gemini CLI + ~/.gemini"
-    "Agent skills for all coding agents"
+    "Restore sshd configuration and firewall notices"
 )
 
 # Reverse dependency map: which components depend on THIS one
-# node(5) is required by claude-code(11), codex(12), gemini(13), skills(14)
-COMP_DEPENDENTS=("" "" "" "" "" "11 12 13 14" "" "" "" "" "" "" "" "" "")
+COMP_DEPENDENTS=("" "" "" "" "" "" "" "" "" "10" "")
 
-# Whether uninstall needs sudo (indexes: shell=0 tmux=1 git=2 tools=3 essential-tools=4
-# node=5 uv=6 go=7 docker=8 tailscale=9 ssh=10 claude-code=11 codex=12 gemini=13 skills=14)
+# Whether uninstall needs sudo (indexes: shell=0 tmux=1 git=2 tools=3 neovim=4
+# node=5 uv=6 containers=7 tailscale=8 ssh=9 security=10)
 # On macOS, brew operations do not require sudo
 if is_macos; then
-    COMP_NEEDS_SUDO=(1 0 0 0 0 0 0 0 0 0 1 0 0 0 0)
+    COMP_NEEDS_SUDO=(1 0 0 0 0 0 0 0 0 1 1)
 else
-    COMP_NEEDS_SUDO=(1 1 0 1 1 0 0 0 1 1 1 0 0 0 0)
+    COMP_NEEDS_SUDO=(1 1 0 1 0 0 0 1 1 1 1)
 fi
 
 # State arrays
-COMP_INSTALLED=(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
-COMP_SELECTED=(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+COMP_INSTALLED=(0 0 0 0 0 0 0 0 0 0 0)
+COMP_SELECTED=(0 0 0 0 0 0 0 0 0 0 0)
 VISIBLE=()
 
 # --- [D] Utility Functions ---------------------------------------------------
@@ -114,9 +115,16 @@ SUDO_KEEPALIVE_PID=""
 SPINNER_PID=""
 
 cleanup() {
-    [[ "$CURSOR_HIDDEN" -eq 1 ]] && printf '\033[?25h' 2>/dev/null
-    [[ -n "${SPINNER_PID:-}" ]] && kill "$SPINNER_PID" 2>/dev/null || true
-    [[ -n "${SUDO_KEEPALIVE_PID:-}" ]] && kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+    if [[ "${CURSOR_HIDDEN:-0}" -eq 1 ]]; then
+        printf '\033[?25h' 2>/dev/null || true
+    fi
+    if [[ -n "${SPINNER_PID:-}" ]]; then
+        kill "$SPINNER_PID" 2>/dev/null || true
+    fi
+    if [[ -n "${SUDO_KEEPALIVE_PID:-}" ]]; then
+        kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+    fi
+    return 0
 }
 trap cleanup EXIT INT TERM
 
@@ -165,7 +173,7 @@ print_banner() {
     printf "\n"
     printf "  ${CYAN}${BOLD}┌──────────────────────────────────────────┐${NC}\n"
     printf "  ${CYAN}${BOLD}│${NC}  ${BOLD}${WHITE}Rig Uninstaller${NC}                         ${CYAN}${BOLD}│${NC}\n"
-    printf "  ${CYAN}${BOLD}│${NC}  ${DIM}github.com/X-Zero-L/rig${NC}                 ${CYAN}${BOLD}│${NC}\n"
+    printf "  ${CYAN}${BOLD}│${NC}  ${DIM}github.com/DieRingedesSaturn/rig${NC}        ${CYAN}${BOLD}│${NC}\n"
     printf "  ${CYAN}${BOLD}└──────────────────────────────────────────┘${NC}\n"
     printf "\n"
 }
@@ -175,13 +183,11 @@ hr() { printf "  ${DIM}───────────────────
 # Check if a TTY is truly available (not just that /dev/tty exists as a device node)
 has_tty() { : < /dev/tty 2>/dev/null; }
 
-# Create .rig-backup before modifying a config file
+# Back up before modifying or removing a user config file or directory.
 backup_file() {
-    local file="$1"
-    [[ -f "$file" ]] || return 0
-    local backup="${file}.rig-backup"
-    [[ -f "$backup" ]] && backup="${file}.rig-backup.$(date +%s)"
-    cp "$file" "$backup"
+    local target="$1" backup
+    [[ -e "$target" ]] || return 0
+    backup="$(rig_user_backup "$target" uninstall)"
     echo "  Backup: $backup"
 }
 
@@ -216,15 +222,18 @@ remove_rc_block() {
 load_env() {
     if [[ -d "$HOME/.nvm" ]]; then
         export NVM_DIR="$HOME/.nvm"
-        # shellcheck disable=SC1091
-        [[ -f "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh"
+        if [[ -f "$NVM_DIR/nvm.sh" ]]; then
+            # shellcheck disable=SC1091
+            . "$NVM_DIR/nvm.sh"
+        fi
     fi
-    [[ -d "$HOME/.local/bin" ]] && export PATH="$HOME/.local/bin:$PATH"
-    if [[ -d "$HOME/.goenv" ]]; then
-        export GOENV_ROOT="$HOME/.goenv"
-        export PATH="$GOENV_ROOT/bin:$PATH"
-        eval "$(goenv init -)" 2>/dev/null || true
+    if [[ -d "$HOME/.local/bin" ]]; then
+        export PATH="$HOME/.local/bin:$PATH"
     fi
+    # Return 0 explicitly. This used to end on `[[ -d ... ]] && export ...`,
+    # which returns 1 when ~/.local/bin does not exist — and under `set -e` that
+    # aborted the whole script silently on any machine lacking that directory.
+    return 0
 }
 
 show_help() {
@@ -235,8 +244,8 @@ Rig uninstaller for individual or batch component removal.
 
 Arguments:
   COMPONENT              Single component to uninstall:
-                         shell,tmux,git,tools,essential-tools,node,uv,go,
-                         docker,tailscale,ssh,claude-code,codex,gemini,skills
+                         shell,tmux,git,tools,neovim,node,uv,
+                         containers,tailscale,ssh,security
 
 Options:
   --all                  Uninstall all installed components
@@ -245,23 +254,23 @@ Options:
   --yes                  Auto-confirm prompts (required for headless/no-TTY operation)
   --remove-docker-data   Remove Docker volumes and images at /var/lib/docker
   --remove-ssh-keys      Remove SSH keys in ~/.ssh/
-  --remove-claude-data   Remove Claude Code config and data at ~/.claude/
+  --keep-node-versions   Keep ~/.nvm (all Node versions + global npm packages)
   --list                 List installed components and exit
   -v, --verbose          Show raw command output
   -h, --help             Show this help
 
 Data Safety:
-  By default, destructive data (Docker volumes, SSH keys, Claude config) is
-  preserved during uninstall. Use the --remove-* flags above to opt in to
-  data removal. The --force flag skips prompts but does NOT auto-remove data.
+  By default, destructive data (Docker volumes, SSH keys) is preserved during
+  uninstall. Use the --remove-* flags above to opt in to data removal. The
+  --force flag skips prompts but does NOT auto-remove data.
 
   When no TTY is available (e.g., CI/scripts), --yes is required to proceed.
 
 Examples:
-  bash uninstall.sh docker                         # Uninstall Docker (data preserved)
-  bash uninstall.sh docker --remove-docker-data    # Uninstall Docker + remove data
+  bash uninstall.sh containers                     # Uninstall Containers (data preserved)
+  bash uninstall.sh containers --remove-docker-data # Uninstall Containers + remove data
   bash uninstall.sh node --force                   # Force uninstall Node.js
-  bash uninstall.sh --components codex,gemini      # Uninstall multiple
+  bash uninstall.sh --components containers,node   # Uninstall multiple
   bash uninstall.sh --all --yes                    # Uninstall everything (headless-safe)
   bash uninstall.sh --list                         # Show what's installed
 HELP
@@ -269,21 +278,22 @@ HELP
 
 # --- [E] Detection -----------------------------------------------------------
 
-check_shell_installed() { [[ -d "$HOME/.oh-my-zsh" ]]; }
+check_shell_installed() { command -v zsh &>/dev/null; }
 check_tmux_installed() { command -v tmux &>/dev/null; }
 check_git_installed() { command -v git &>/dev/null; }
 check_tools_installed() { command -v rg &>/dev/null && command -v jq &>/dev/null; }
-check_essential_tools_installed() { pkg_check_installed build-tools; }
+check_neovim_installed() { command -v nvim &>/dev/null; }
 check_node_installed() { command -v nvm &>/dev/null || [[ -f "$HOME/.nvm/nvm.sh" ]]; }
 check_uv_installed() { command -v uv &>/dev/null; }
-check_go_installed() { command -v goenv &>/dev/null || [[ -d "$HOME/.goenv/bin" ]]; }
-check_docker_installed() { command -v docker &>/dev/null; }
+check_containers_installed() { command -v podman &>/dev/null || command -v docker &>/dev/null; }
 check_tailscale_installed() { command -v tailscale &>/dev/null; }
 check_ssh_installed() { [[ -f /etc/ssh/sshd_config ]]; }
-check_claude_code_installed() { command -v claude &>/dev/null; }
-check_codex_installed() { command -v codex &>/dev/null; }
-check_gemini_installed() { command -v gemini &>/dev/null; }
-check_skills_installed() { [[ -d "$HOME/.local/share/skills" ]] || [[ -d "$HOME/.claude/skills" ]]; }
+check_security_installed() {
+    grep -q "# Rig Security Baseline" /etc/ssh/sshd_config 2>/dev/null || \
+    [[ -f "$RIG_SYSTEM_BACKUP_DIR/etc__ssh__sshd_config.pre-rig" ]] || \
+    ls /etc/ssh/sshd_config.rig.bak.* &>/dev/null || \
+    [[ -f /etc/docker/daemon.json.rig-backup ]]
+}
 
 detect_installed() {
     local checks=(
@@ -291,17 +301,13 @@ detect_installed() {
         check_tmux_installed
         check_git_installed
         check_tools_installed
-        check_essential_tools_installed
+        check_neovim_installed
         check_node_installed
         check_uv_installed
-        check_go_installed
-        check_docker_installed
+        check_containers_installed
         check_tailscale_installed
         check_ssh_installed
-        check_claude_code_installed
-        check_codex_installed
-        check_gemini_installed
-        check_skills_installed
+        check_security_installed
     )
     for i in "${!checks[@]}"; do
         if "${checks[$i]}"; then
@@ -314,14 +320,14 @@ detect_installed() {
 
 collect_confirmations() {
     # --force skips interactive prompts but does NOT auto-enable destructive data removal.
-    # Use --remove-docker-data, --remove-ssh-keys, --remove-claude-data explicitly.
+    # Use --remove-docker-data and --remove-ssh-keys explicitly.
     [[ "$FORCE" -eq 1 ]] && return 0
     has_tty || return 0
 
     local needs_confirm=0
     for i in "${!COMP_SELECTED[@]}"; do
         [[ "${COMP_SELECTED[$i]}" -eq 0 ]] && continue
-        case "${COMP_IDS[$i]}" in docker|ssh|claude-code) needs_confirm=1 ;; esac
+        case "${COMP_IDS[$i]}" in containers|docker|ssh|node) needs_confirm=1 ;; esac
     done
     [[ $needs_confirm -eq 0 ]] && return 0
 
@@ -331,7 +337,7 @@ collect_confirmations() {
     for i in "${!COMP_SELECTED[@]}"; do
         [[ "${COMP_SELECTED[$i]}" -eq 0 ]] && continue
         case "${COMP_IDS[$i]}" in
-            docker)
+            containers|docker)
                 printf "\n  ${BOLD}${WHITE}Docker${NC}\n"
                 printf "  ${YELLOW}Volumes and images at /var/lib/docker can be removed.${NC}\n"
                 printf "  ${BOLD}Remove all Docker data?${NC} ${DIM}[y/N]${NC} "
@@ -345,12 +351,14 @@ collect_confirmations() {
                 local ans; read -r ans </dev/tty
                 [[ "$ans" =~ ^[Yy] ]] && SSH_REMOVE_KEYS=1
                 ;;
-            claude-code)
-                printf "\n  ${BOLD}${WHITE}Claude Code${NC}\n"
-                printf "  ${YELLOW}~/.claude (settings, history, projects) can be removed.${NC}\n"
-                printf "  ${BOLD}Remove Claude Code config and data?${NC} ${DIM}[y/N]${NC} "
+            node)
+                printf "\n  ${BOLD}${WHITE}Node.js (nvm)${NC}\n"
+                printf "  ${YELLOW}~/.nvm holds every nvm-managed Node version and all globally${NC}\n"
+                printf "  ${YELLOW}installed npm packages. Removing it deletes all of them.${NC}\n"
+                printf "  ${BOLD}Remove $HOME/.nvm?${NC} ${DIM}[y/N]${NC} "
                 local ans; read -r ans </dev/tty
-                [[ "$ans" =~ ^[Yy] ]] && CLAUDE_REMOVE_CONFIG=1
+                # Declining is the safe direction: keep the data.
+                [[ "$ans" =~ ^[Yy] ]] || NODE_KEEP_VERSIONS=1
                 ;;
         esac
     done
@@ -362,49 +370,51 @@ collect_confirmations() {
 uninstall_shell() {
     echo "=== Uninstalling Shell Environment ==="
 
-    # Remove Starship
-    if command -v starship &>/dev/null; then
-        sudo rm -f /usr/local/bin/starship /usr/local/bin/starship.old 2>/dev/null || true
-        rm -f "$HOME/.config/starship.toml"
-        echo "  Starship removed."
+    # Packages this component installs. zsh itself is deliberately left alone:
+    # it is the login shell, and pulling it out from under a live session is
+    # never a safe cleanup.
+    pkg_remove starship zsh-autosuggestions zsh-syntax-highlighting 2>/dev/null || true
+
+    # Starship installed from upstream lives here instead of in the package DB.
+    if [[ -x "$HOME/.local/bin/starship" ]]; then
+        rm -f "$HOME/.local/bin/starship" "$HOME/.local/bin/starship.old"
+        echo "  Removed $HOME/.local/bin/starship"
     fi
 
-    # Clean starship init from rc files
-    remove_rc_line 'eval "$(starship init zsh)"'
+    # ~/.zshrc and ~/.config/starship.toml are the user's own files — this
+    # component never created or edited them, so it must not remove them.
+    if [[ -f "$HOME/.config/starship.toml" ]]; then
+        echo "  Kept $HOME/.config/starship.toml (your configuration)"
+    fi
+    if [[ -f "$HOME/.zshrc" ]]; then
+        echo "  Kept $HOME/.zshrc (your configuration)"
+    fi
 
-    # Remove Oh My Zsh custom plugins
-    local zsh_custom="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
-    rm -rf "${zsh_custom:?}/plugins/zsh-autosuggestions" 2>/dev/null || true
-    rm -rf "${zsh_custom:?}/plugins/zsh-syntax-highlighting" 2>/dev/null || true
-
-    # Remove Oh My Zsh
+    # Oh My Zsh is left untouched: Rig does not manage or remove personal shell frameworks.
     if [[ -d "$HOME/.oh-my-zsh" ]]; then
-        rm -rf "$HOME/.oh-my-zsh"
-        echo "  Oh My Zsh removed."
-        # Restore pre-omz zshrc if it exists
-        if [[ -f "$HOME/.zshrc.pre-oh-my-zsh" ]]; then
-            backup_file "$HOME/.zshrc"
-            mv "$HOME/.zshrc.pre-oh-my-zsh" "$HOME/.zshrc"
-            echo "  Restored pre-Oh My Zsh .zshrc."
-        fi
+        echo "  Kept $HOME/.oh-my-zsh (personal configuration preserved)"
     fi
 
-    # Change default shell back to bash
-    if [[ "${SHELL:-}" == *"zsh"* ]] && command -v bash &>/dev/null; then
-        sudo chsh -s "$(command -v bash)" "$USER" 2>/dev/null || true
-        echo "  Default shell changed to bash."
-    fi
+    # The default shell is left as-is on purpose: this component never changed
+    # it, and flipping someone's login shell is not a cleanup step.
+    echo "  Left the default login shell unchanged."
 }
 
 uninstall_tmux() {
     echo "=== Uninstalling Tmux ==="
 
     if [[ -f "$HOME/.tmux.conf" ]]; then
-        backup_file "$HOME/.tmux.conf"
-        rm -f "$HOME/.tmux.conf"
+        if head -1 "$HOME/.tmux.conf" 2>/dev/null | grep -qx '# Rig Tmux Baseline'; then
+            backup_file "$HOME/.tmux.conf"
+            rm -f "$HOME/.tmux.conf"
+            echo "  $HOME/.tmux.conf backed up and removed."
+        else
+            echo "  Kept $HOME/.tmux.conf (not identified as a Rig-created file)"
+        fi
     fi
-    rm -rf "$HOME/.tmux"
-    echo "  Config and plugins removed."
+    if [[ -d "$HOME/.tmux" ]]; then
+        echo "  Kept $HOME/.tmux (plugins and user configurations preserved)"
+    fi
 
     if command -v tmux &>/dev/null; then
         pkg_remove tmux 2>/dev/null || true
@@ -430,14 +440,6 @@ uninstall_tools() {
         rm -f "$HOME/.local/bin/bat" "$HOME/.local/bin/fd"
     fi
 
-    # Remove packages (abstract names resolved by pkg_remove)
-    pkg_remove ripgrep jq fd bat tree shellcheck xclip 2>/dev/null || true
-    echo "  CLI tools removed."
-}
-
-uninstall_essential_tools() {
-    echo "=== Uninstalling Essential Tools ==="
-
     # Remove gh CLI and its platform-specific repo config
     if command -v gh &>/dev/null; then
         if is_macos; then
@@ -452,28 +454,44 @@ uninstall_essential_tools() {
         echo "  GitHub CLI removed."
     fi
 
-    # Remove build tools (abstract names resolved per platform)
-    pkg_remove build-tools wget unzip 2>/dev/null || true
-    echo "  Essential tools removed."
+    # Remove packages (abstract names resolved by pkg_remove)
+    pkg_remove ripgrep jq fd bat tree shellcheck build-tools wget unzip xclip fastfetch 2>/dev/null || true
+    rm -f "$HOME/.local/bin/fastfetch"
+    echo "  CLI tools removed."
 }
 
 uninstall_node() {
     echo "=== Uninstalling Node.js (nvm) ==="
 
-    rm -rf "$HOME/.nvm"
-    echo "  nvm directory removed."
+    if [[ -d "$HOME/.nvm" ]]; then
+        # Say what is about to be lost before losing it.
+        local versions count=0
+        versions="$(ls "$HOME/.nvm/versions/node" 2>/dev/null | tr '\n' ' ')"
+        if [[ -d "$HOME/.nvm/versions/node" ]]; then
+            count="$(find "$HOME/.nvm/versions/node" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+        fi
+        echo "  nvm versions: ${versions:-none}"
+        echo "  global npm packages live inside those versions and go with them."
 
-    # Clean nvm references from rc files
+        if [[ "$NODE_KEEP_VERSIONS" -eq 1 ]]; then
+            echo "  Kept $HOME/.nvm (removal declined)."
+        else
+            rm -rf "$HOME/.nvm"
+            echo "  Removed $HOME/.nvm ($count version(s))."
+        fi
+    else
+        echo "  $HOME/.nvm not present."
+    fi
+
+    # rc files belong to the user — report the lines instead of editing them.
+    local rc
     for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
         [[ -f "$rc" ]] || continue
         if grep -q '\.nvm' "$rc"; then
-            backup_file "$rc"
-            local tmp="${rc}.tmp.$$"
-            grep -v '\.nvm' "$rc" > "$tmp" || true
-            [[ -s "$tmp" ]] && mv "$tmp" "$rc" || rm -f "$tmp"
+            echo "  $rc still loads nvm; this script does not edit it."
+            echo "    Delete the nvm lines yourself once you no longer need nvm."
         fi
     done
-    echo "  RC files cleaned."
 }
 
 uninstall_uv() {
@@ -485,78 +503,135 @@ uninstall_uv() {
     echo "  uv and managed pythons removed."
 }
 
-uninstall_go() {
-    echo "=== Uninstalling Go (goenv) ==="
+uninstall_containers() {
+    local engine mode
+    engine="$(containers_engine)"
+    mode="$(containers_mode)"
 
-    rm -rf "$HOME/.goenv"
-    rm -f "$HOME/.goenvrc"
-    echo "  goenv removed."
+    echo "=== Uninstalling Containers ($engine, $mode) ==="
 
-    remove_rc_block "goenv"
-    echo "  RC files cleaned."
-}
+    case "$engine" in
+        podman)
+            if is_macos; then
+                brew uninstall podman 2>/dev/null || true
+            else
+                pkg_remove podman 2>/dev/null || true
+            fi
+            echo "  Podman package removed."
 
-uninstall_docker() {
-    echo "=== Uninstalling Docker ==="
+            # Podman is daemonless, so there is no service to stop. Images and
+            # volumes are user data and are never removed by default.
+            if [[ -d "$HOME/.local/share/containers" ]]; then
+                echo "  Kept $HOME/.local/share/containers (images and volumes)"
+            fi
+            if [[ -f "$HOME/.config/containers/registries.conf" ]]; then
+                echo "  Kept $HOME/.config/containers/registries.conf (your configuration)"
+            fi
+            ;;
 
-    if is_macos; then
-        # macOS: Docker Desktop is a cask, no systemd
-        brew uninstall --cask docker 2>/dev/null || true
-        echo "  Docker Desktop removed."
-    else
-        # Linux: stop systemd services
-        sudo systemctl stop docker.socket 2>/dev/null || true
-        sudo systemctl stop docker 2>/dev/null || true
-        sudo systemctl stop containerd 2>/dev/null || true
-        echo "  Services stopped."
+        docker)
+            if is_macos; then
+                brew uninstall --cask docker 2>/dev/null || true
+                if [[ "$DOCKER_REMOVE_DATA" -eq 1 ]]; then
+                    backup_file "$HOME/.docker"
+                    rm -rf "$HOME/.docker"
+                    echo "  Docker Desktop data and config removed (backed up)."
+                else
+                    echo "  Kept $HOME/.docker (your configuration)"
+                fi
+                echo "  Docker Desktop removed."
+                return 0
+            fi
 
-        # Remove packages per package manager
-        case "$PKG_MANAGER" in
-            apt)
-                sudo apt-get remove -y \
-                    docker-ce docker-ce-cli containerd.io \
-                    docker-compose-plugin docker-buildx-plugin 2>/dev/null || true
-                sudo apt-get autoremove -y 2>/dev/null || true
-                ;;
-            dnf)
-                sudo dnf remove -y \
-                    docker-ce docker-ce-cli containerd.io \
-                    docker-compose-plugin docker-buildx-plugin 2>/dev/null || true
-                ;;
-            yum)
-                sudo yum remove -y \
-                    docker-ce docker-ce-cli containerd.io \
-                    docker-compose-plugin docker-buildx-plugin 2>/dev/null || true
-                ;;
-            pacman)
-                sudo pacman -Rs --noconfirm docker docker-compose docker-buildx 2>/dev/null || true
-                ;;
-        esac
-        echo "  Packages removed."
+            if [[ "$mode" == "rootless" ]]; then
+                # Rootless: the daemon is a user service, not a system one.
+                systemctl --user disable --now docker 2>/dev/null || true
+                if command -v dockerd-rootless-setuptool.sh >/dev/null 2>&1; then
+                    dockerd-rootless-setuptool.sh uninstall 2>/dev/null || true
+                fi
+                echo "  Rootless service removed."
 
-        # Remove data (conditional)
-        if [[ "$DOCKER_REMOVE_DATA" -eq 1 ]]; then
-            sudo rm -rf /var/lib/docker /var/lib/containerd
-            echo "  Docker data removed."
-        else
-            echo "  Docker data preserved at /var/lib/docker."
-        fi
+                if [[ "$DOCKER_REMOVE_DATA" -eq 1 ]]; then
+                    rm -rf "$HOME/.local/share/docker"
+                    echo "  Rootless Docker data removed."
+                elif [[ -d "$HOME/.local/share/docker" ]]; then
+                    echo "  Kept $HOME/.local/share/docker (images and volumes)"
+                fi
+                if [[ -f "$HOME/.config/docker/daemon.json" ]]; then
+                    echo "  Kept $HOME/.config/docker/daemon.json (your configuration)"
+                fi
+            else
+                sudo systemctl disable --now docker.socket docker.service 2>/dev/null || true
+                sudo systemctl stop containerd 2>/dev/null || true
+                echo "  System services stopped."
 
-        # Remove config
-        sudo rm -f /etc/docker/daemon.json
-        sudo rm -rf /etc/systemd/system/docker.service.d
-        echo "  System config removed."
+                if [[ "$DOCKER_REMOVE_DATA" -eq 1 ]]; then
+                    sudo rm -rf /var/lib/docker /var/lib/containerd
+                    echo "  Docker data removed."
+                elif [[ -d /var/lib/docker ]]; then
+                    echo "  Kept /var/lib/docker (images and volumes)"
+                fi
 
-        # Remove repo sources (Linux only)
-        sudo rm -f /etc/apt/sources.list.d/docker.list 2>/dev/null || true
-        sudo rm -f /etc/apt/keyrings/docker.asc /etc/apt/keyrings/docker.gpg 2>/dev/null || true
-        sudo rm -f /etc/yum.repos.d/docker-ce.repo 2>/dev/null || true
-        sudo systemctl daemon-reload 2>/dev/null || true
-        echo "  Repo source removed."
-    fi
+                # Protect existing daemon.json: restore rig backup if present, otherwise preserve
+                if [[ -f /etc/docker/daemon.json.rig-backup ]]; then
+                    sudo cp /etc/docker/daemon.json.rig-backup /etc/docker/daemon.json
+                    echo "  Restored original /etc/docker/daemon.json from backup."
+                elif [[ "$DOCKER_REMOVE_DATA" -eq 1 ]]; then
+                    sudo rm -f /etc/docker/daemon.json
+                    echo "  System daemon.json removed."
+                elif [[ -f /etc/docker/daemon.json ]]; then
+                    echo "  Kept /etc/docker/daemon.json (your configuration)"
+                fi
+                sudo rm -rf /etc/systemd/system/docker.service.d 2>/dev/null || true
+                echo "  System service configurations cleaned up."
+            fi
 
-    rm -rf "$HOME/.docker"
-    echo "  User config removed."
+            # Packages, in both modes.
+            case "$PKG_MANAGER" in
+                apt)
+                    sudo apt-get remove -y \
+                        docker-ce docker-ce-cli containerd.io \
+                        docker-ce-rootless-extras \
+                        docker-compose-plugin docker-buildx-plugin 2>/dev/null || true
+                    sudo apt-get autoremove -y 2>/dev/null || true
+                    ;;
+                dnf)
+                    sudo dnf remove -y \
+                        docker-ce docker-ce-cli containerd.io \
+                        docker-ce-rootless-extras \
+                        docker-compose-plugin docker-buildx-plugin 2>/dev/null || true
+                    ;;
+                yum)
+                    sudo yum remove -y \
+                        docker-ce docker-ce-cli containerd.io \
+                        docker-ce-rootless-extras \
+                        docker-compose-plugin docker-buildx-plugin 2>/dev/null || true
+                    ;;
+                pacman)
+                    sudo pacman -Rs --noconfirm docker docker-compose docker-buildx 2>/dev/null || true
+                    ;;
+            esac
+            echo "  Packages removed."
+
+            # Repo sources and the CLI context, both modes.
+            sudo rm -f /etc/apt/sources.list.d/docker.list 2>/dev/null || true
+            sudo rm -f /etc/apt/keyrings/docker.asc /etc/apt/keyrings/docker.gpg 2>/dev/null || true
+            sudo rm -f /etc/yum.repos.d/docker-ce.repo 2>/dev/null || true
+            sudo systemctl daemon-reload 2>/dev/null || true
+
+            if [[ "$DOCKER_REMOVE_DATA" -eq 1 ]]; then
+                backup_file "$HOME/.docker"
+                rm -rf "$HOME/.docker"
+                echo "  User CLI configuration removed (backed up)."
+            elif [[ -d "$HOME/.docker" ]]; then
+                echo "  Kept $HOME/.docker (CLI configuration)"
+            fi
+            ;;
+
+        *)
+            echo "  No container backend selected, nothing to do."
+            ;;
+    esac
 }
 
 uninstall_tailscale() {
@@ -634,74 +709,96 @@ uninstall_ssh() {
 
     # Restore sshd_config from backup
     local latest_backup=""
+    latest_backup="$(rig_system_latest_backup /etc/ssh/sshd_config setup-ssh || true)"
     for f in /etc/ssh/sshd_config.bak.*; do
-        [[ -f "$f" ]] && latest_backup="$f"
+        [[ -z "$latest_backup" && -f "$f" ]] && latest_backup="$f"
     done
     if [[ -n "$latest_backup" ]]; then
-        sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.rig-backup 2>/dev/null || true
+        rig_system_backup /etc/ssh/sshd_config uninstall >/dev/null 2>&1 || true
         sudo cp "$latest_backup" /etc/ssh/sshd_config
         sudo systemctl restart ssh 2>/dev/null || sudo systemctl restart sshd 2>/dev/null || true
         echo "  sshd_config restored from backup."
     fi
 }
 
-uninstall_claude_code() {
-    echo "=== Uninstalling Claude Code ==="
+uninstall_neovim() {
+    echo "=== Uninstalling Neovim ==="
 
-    load_env
-    if command -v claude &>/dev/null; then
-        npm uninstall -g @anthropic-ai/claude-code 2>/dev/null || true
-        echo "  Claude Code uninstalled."
+    local nvim_conf="${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua"
+    if [[ -f "$nvim_conf" ]]; then
+        if grep -q "Rig Neovim Baseline\|Lightweight terminal-native Neovim configuration" "$nvim_conf" 2>/dev/null; then
+            backup_file "$nvim_conf"
+            rm -f "$nvim_conf"
+            echo "  Config $nvim_conf backed up and removed."
+        else
+            echo "  Kept $nvim_conf (custom configuration not created by Rig)"
+        fi
     fi
 
-    if [[ "$CLAUDE_REMOVE_CONFIG" -eq 1 ]]; then
-        rm -rf "$HOME/.claude"
-        rm -f "$HOME/.claude.json"
-        echo "  Config and data removed."
-    else
-        echo "  Config preserved (~/.claude)."
+    if command -v nvim &>/dev/null; then
+        pkg_remove neovim 2>/dev/null || true
+        echo "  neovim package removed."
     fi
-
-    remove_rc_line "alias cc='claude --dangerously-skip-permissions'"
 }
 
-uninstall_codex() {
-    echo "=== Uninstalling Codex CLI ==="
+uninstall_security() {
+    echo "=== Rolling Back Security Baseline ==="
 
-    load_env
-    if command -v codex &>/dev/null; then
-        npm uninstall -g @openai/codex 2>/dev/null || true
-        echo "  Codex CLI uninstalled."
+    local sshd_cfg="/etc/ssh/sshd_config"
+    local restored=0
+
+    # Prefer the stable pre-Rig snapshot. For installations created before that
+    # snapshot existed, the oldest timestamped backup is the pre-Rig state.
+    local original_bak oldest_bak new_original_bak
+    new_original_bak="$(rig_system_backup_once_path "$sshd_cfg" pre-rig)"
+    original_bak="${sshd_cfg}.rig.original"
+    oldest_bak=$(ls -tr "${sshd_cfg}.rig.bak."* 2>/dev/null | head -1 || true)
+    if [[ -f "$new_original_bak" ]]; then
+        sudo cp -p "$new_original_bak" "$sshd_cfg"
+        mv "$new_original_bak" "${new_original_bak}.restored.$(date +%s)"
+        echo "  Restored $sshd_cfg from the centralized pre-Rig snapshot."
+        restored=1
+    elif sudo test -f "$original_bak"; then
+        sudo cp -p "$original_bak" "$sshd_cfg"
+        sudo mv "$original_bak" "${original_bak}.restored.$(date +%s)"
+        echo "  Restored $sshd_cfg from the pre-Rig snapshot."
+        restored=1
+    elif [[ -n "$oldest_bak" && -f "$oldest_bak" ]]; then
+        sudo cp -p "$oldest_bak" "$sshd_cfg"
+        echo "  Restored $sshd_cfg from $oldest_bak"
+        restored=1
+    elif [[ -f "$sshd_cfg" ]] && grep -q "# Rig Security Baseline" "$sshd_cfg"; then
+        local tmp_cfg
+        tmp_cfg="$(mktemp)"
+        awk '
+            /^# Rig Security Baseline$/ { skip=1; next }
+            skip && /^[[:space:]]*$/ { skip=0; next }
+            skip { next }
+            { print }
+        ' "$sshd_cfg" > "$tmp_cfg"
+        sudo cp "$tmp_cfg" "$sshd_cfg"
+        rm -f "$tmp_cfg"
+        echo "  Removed Rig Security Baseline block from $sshd_cfg"
+        restored=1
     fi
 
-    rm -rf "$HOME/.codex"
-    echo "  Config removed."
-
-    remove_rc_line "alias cx='codex --dangerously-bypass-approvals-and-sandbox'"
-}
-
-uninstall_gemini() {
-    echo "=== Uninstalling Gemini CLI ==="
-
-    load_env
-    if command -v gemini &>/dev/null; then
-        npm uninstall -g @google/gemini-cli 2>/dev/null || true
-        echo "  Gemini CLI uninstalled."
+    if [[ $restored -eq 1 ]]; then
+        if command -v sshd >/dev/null 2>&1 && sudo sshd -t 2>/dev/null; then
+            if command -v systemctl >/dev/null 2>&1 && systemctl is-system-running >/dev/null 2>&1; then
+                if is_debian; then
+                    sudo systemctl reload-or-restart ssh 2>/dev/null || true
+                else
+                    sudo systemctl reload-or-restart sshd 2>/dev/null || true
+                fi
+            elif command -v service >/dev/null 2>&1; then
+                sudo service ssh reload 2>/dev/null || sudo service sshd reload 2>/dev/null || true
+            fi
+            echo "  sshd reloaded with restored configuration."
+        fi
     fi
 
-    rm -rf "$HOME/.gemini"
-    echo "  Config removed."
-
-    remove_rc_line "alias gm='gemini -y'"
-}
-
-uninstall_skills() {
-    echo "=== Uninstalling Agent Skills ==="
-
-    rm -rf "$HOME/.local/share/skills"
-    # Only remove skills subdirectory, not all of ~/.claude
-    rm -rf "$HOME/.claude/skills"
-    echo "  Skills removed."
+    echo "  Note: Firewall rules have been preserved. To reset, use 'sudo ufw reset' or firewall-cmd."
+    echo "  Security baseline rollback complete."
 }
 
 # --- [H] Dispatcher & Dependency Checker ------------------------------------
@@ -713,17 +810,13 @@ run_uninstall() {
         tmux)            uninstall_tmux ;;
         git)             uninstall_git ;;
         tools)           uninstall_tools ;;
-        essential-tools) uninstall_essential_tools ;;
+        neovim)          uninstall_neovim ;;
         node)            uninstall_node ;;
         uv)              uninstall_uv ;;
-        go)              uninstall_go ;;
-        docker)          uninstall_docker ;;
+        containers)      uninstall_containers ;;
         tailscale)       uninstall_tailscale ;;
         ssh)             uninstall_ssh ;;
-        claude-code)     uninstall_claude_code ;;
-        codex)           uninstall_codex ;;
-        gemini)          uninstall_gemini ;;
-        skills)          uninstall_skills ;;
+        security)        uninstall_security ;;
     esac
 }
 
@@ -962,8 +1055,8 @@ parse_args() {
                 DOCKER_REMOVE_DATA=1; shift ;;
             --remove-ssh-keys)
                 SSH_REMOVE_KEYS=1; shift ;;
-            --remove-claude-data)
-                CLAUDE_REMOVE_CONFIG=1; shift ;;
+            --keep-node-versions)
+                NODE_KEEP_VERSIONS=1; shift ;;
             --list)
                 setup_colors; load_env; detect_installed
                 printf "\n  ${BOLD}Installed components:${NC}\n"; hr
@@ -1132,7 +1225,7 @@ main() {
         printf "\n"
     fi
 
-    # Collect data-removal confirmations for docker/ssh/claude-code
+    # Collect data-removal confirmations for docker/ssh
     collect_confirmations
 
     # Pre-cache sudo

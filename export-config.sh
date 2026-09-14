@@ -3,7 +3,7 @@ set -euo pipefail
 
 # =============================================================================
 # Rig Config Export
-# https://github.com/X-Zero-L/rig
+# https://github.com/DieRingedesSaturn/rig
 #
 # Exports installed component configuration to JSON + optional secrets.env.
 #
@@ -30,6 +30,15 @@ else
     is_macos() { [[ "$(uname -s)" == "Darwin" ]]; }
 fi
 
+if [[ -f "${BASH_SOURCE[0]%/*}/lib/rig-config.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "${BASH_SOURCE[0]%/*}/lib/rig-config.sh"
+fi
+if [[ -f "${BASH_SOURCE[0]%/*}/lib/backup.sh" ]]; then
+    # shellcheck disable=SC1091
+    source "${BASH_SOURCE[0]%/*}/lib/backup.sh"
+fi
+
 # --- Options -----------------------------------------------------------------
 
 OUTPUT_DIR="$HOME/.rig"
@@ -52,8 +61,8 @@ while [[ $# -gt 0 ]]; do
             echo "  secrets.env       - API keys/tokens (imported by rig)"
             echo ""
             echo "Informational only (not imported):"
-            echo "  - Node/Go versions (detected at import time)"
-            echo "  - Docker registry mirrors (requires manual setup)"
+            echo "  - Node versions (detected at import time)"
+            echo "  - Container engine and registry mirrors (requires manual setup)"
             echo "  - Model preferences (preserved if already configured)"
             exit 0
             ;;
@@ -104,8 +113,14 @@ json_kv() {
 # Load nvm if available
 load_nvm() {
     export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-    # shellcheck disable=SC1091
-    [[ -f "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh" 2>/dev/null
+    if [[ -f "$NVM_DIR/nvm.sh" ]]; then
+        # shellcheck disable=SC1091
+        . "$NVM_DIR/nvm.sh" 2>/dev/null
+    fi
+    # Returning 0 on purpose: a missing nvm is normal, and a bare `[[ ]] && cmd`
+    # as the last statement makes the function return 1, which under `set -e`
+    # aborts the caller depending on how it was invoked.
+    return 0
 }
 
 # --- Detect Installed Components ---------------------------------------------
@@ -138,15 +153,16 @@ detect_installed() {
     # uv
     command -v uv &>/dev/null || [[ -x "$HOME/.local/bin/uv" ]] && components+=("uv")
 
-    # Go
-    if [[ -d "$HOME/.goenv" ]]; then
-        export GOENV_ROOT="$HOME/.goenv"
-        export PATH="$GOENV_ROOT/bin:$GOENV_ROOT/shims:$PATH"
-    fi
-    command -v go &>/dev/null && components+=("go")
+    # Neovim
+    command -v nvim &>/dev/null && components+=("neovim")
 
-    # Docker
-    command -v docker &>/dev/null && components+=("docker")
+    # Containers — one component with two interchangeable backends, so report
+    # whichever backend this machine actually has.
+    if command -v podman &>/dev/null; then
+        components+=("containers")
+    elif command -v docker &>/dev/null; then
+        components+=("containers")
+    fi
 
     # Tailscale
     command -v tailscale &>/dev/null && components+=("tailscale")
@@ -154,20 +170,14 @@ detect_installed() {
     # SSH
     command -v ssh &>/dev/null && [[ -d "$HOME/.ssh" ]] && components+=("ssh")
 
-    # Claude Code
-    command -v claude &>/dev/null && components+=("claude-code")
-
-    # Codex
-    command -v codex &>/dev/null && components+=("codex")
-
-    # Gemini
-    command -v gemini &>/dev/null && components+=("gemini")
-
-    # Skills
-    local skill_dirs=("$HOME/.claude/agent-skills" "$HOME/.claude/skills")
-    for d in "${skill_dirs[@]}"; do
-        [[ -d "$d" ]] && components+=("skills") && break
-    done
+    # Security Baseline
+    if [[ -f /etc/ssh/sshd_config ]] && grep -q "# Rig Security Baseline" /etc/ssh/sshd_config 2>/dev/null; then
+        components+=("security")
+    elif [[ -f "${RIG_SYSTEM_BACKUP_DIR:-$HOME/.local/share/rig/backups/system}/etc__ssh__sshd_config.pre-rig" ]]; then
+        components+=("security")
+    elif ls /etc/ssh/sshd_config.rig.bak.* &>/dev/null; then
+        components+=("security")
+    fi
 
     printf '%s\n' "${components[@]}"
 }
@@ -176,7 +186,7 @@ detect_installed() {
 
 extract_config() {
     local json="{\n"
-    json+='  "_comment": "Non-sensitive config exported by Rig. Node/Go versions, Docker mirrors, and model fields are informational only and not imported.",\n'
+    json+='  "_comment": "Non-sensitive config exported by Rig. Node versions, container engine/mirrors, and model fields are informational only and not imported.",\n'
     json+='  "rig_version": "0.1.0",\n'
     json+="  \"exported_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\n"
 
@@ -213,63 +223,113 @@ extract_config() {
     json+="$(json_kv "version" "$node_version")"
     json+='\n    },\n'
 
-    # Go (informational only)
-    local go_version="N/A"
-    command -v go &>/dev/null && go_version=$(go version 2>/dev/null | sed 's/go version go//' | awk '{print $1}')
-    json+='    "go": {\n'
-    json+="$(json_kv "version" "$go_version")"
-    json+='\n    },\n'
-
-    # Docker (informational only)
-    local docker_mirrors=""
-    if is_macos; then
-        # macOS: Docker Desktop stores config in user directory
-        local docker_config="$HOME/.docker/daemon.json"
-        if [[ -f "$docker_config" ]]; then
-            docker_mirrors=$(grep -o '"registry-mirrors"[[:space:]]*:[[:space:]]*\[[^]]*\]' "$docker_config" 2>/dev/null || true)
-        fi
-    else
-        # Linux: Docker Engine uses /etc/docker/daemon.json
-        if [[ -f /etc/docker/daemon.json ]]; then
-            docker_mirrors=$(grep -o '"registry-mirrors"[[:space:]]*:[[:space:]]*\[[^]]*\]' /etc/docker/daemon.json 2>/dev/null || true)
+    # Containers (informational only). The backend and mode come from the rig
+    # config, and each backend keeps its registry mirrors in a different place:
+    # rootless Docker and Podman are user-level, rootful Docker is system-level.
+    local engine="" mirrors=""
+    if command -v rig_config_get >/dev/null 2>&1; then
+        engine="$(rig_config_get RIG_CONTAINER_ENGINE "")"
+    fi
+    if [[ -z "$engine" ]]; then
+        if command -v podman &>/dev/null; then
+            engine="podman"
+        elif command -v docker &>/dev/null; then
+            engine="docker"
         fi
     fi
-    json+='    "docker": {\n'
-    if [[ -n "$docker_mirrors" ]]; then
-        json+="    $docker_mirrors"
+
+    if [[ "$engine" == "podman" && -f "$HOME/.config/containers/registries.conf" ]]; then
+        mirrors=$(grep -o 'location[[:space:]]*=[[:space:]]*"[^"]*"' "$HOME/.config/containers/registries.conf" 2>/dev/null | tail -1 || true)
+    elif [[ -f "$HOME/.config/docker/daemon.json" ]]; then
+        mirrors=$(grep -o '"registry-mirrors"[[:space:]]*:[[:space:]]*\[[^]]*\]' "$HOME/.config/docker/daemon.json" 2>/dev/null || true)
+    elif [[ -f /etc/docker/daemon.json ]]; then
+        mirrors=$(grep -o '"registry-mirrors"[[:space:]]*:[[:space:]]*\[[^]]*\]' /etc/docker/daemon.json 2>/dev/null || true)
+    fi
+
+    local container_mode="${RIG_CONTAINER_MODE:-rootless}"
+    if command -v rig_config_get >/dev/null 2>&1; then
+        container_mode="$(rig_config_get RIG_CONTAINER_MODE "$container_mode")"
+    fi
+
+    json+='    "containers": {\n'
+    json+="$(json_kv "engine" "$engine")"
+    json+=',\n'
+    json+="$(json_kv "mode" "$container_mode")"
+    json+=',\n'
+    if [[ -n "$mirrors" ]]; then
+        json+="    $mirrors"
     else
         json+='    "registry-mirrors": []'
     fi
     json+='\n    },\n'
 
-    # Claude Code (informational only)
-    local claude_model=""
-    if [[ -f "$HOME/.claude/settings.json" ]]; then
-        claude_model=$(grep -o '"model"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.claude/settings.json" 2>/dev/null | head -1 | sed 's/.*: *"//;s/"//' || true)
-    fi
-    json+='    "claude_code": {\n'
-    json+="$(json_kv "model" "${claude_model}")"
-    json+='\n    },\n'
+    # System & Security baseline
+    local rig_profile firewall public_tcp public_udp ssh_port
+    local ssh_root_login ssh_password_auth ssh_pubkey_auth ssh_access admin_user
+    local fw_default_in fw_default_out check_listening_ports warn_undeclared_ports
 
-    # Codex (informational only)
-    local codex_model="" codex_effort=""
-    if [[ -f "$HOME/.codex/config.toml" ]]; then
-        codex_model=$(grep '^model[[:space:]]*=' "$HOME/.codex/config.toml" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*"//;s/".*//' || true)
-        codex_effort=$(grep '^model_reasoning_effort[[:space:]]*=' "$HOME/.codex/config.toml" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*"//;s/".*//' || true)
+    rig_profile="${RIG_PROFILE:-}"
+    firewall="${RIG_FIREWALL:-auto}"
+    public_tcp="${RIG_PUBLIC_TCP:-22}"
+    public_udp="${RIG_PUBLIC_UDP:-}"
+    ssh_port="${RIG_SSH_PORT:-22}"
+    ssh_root_login="${RIG_SSH_ROOT_LOGIN:-no}"
+    ssh_password_auth="${RIG_SSH_PASSWORD_AUTH:-no}"
+    ssh_pubkey_auth="${RIG_SSH_PUBKEY_AUTH:-yes}"
+    ssh_access="${RIG_SSH_ACCESS:-public}"
+    admin_user="${RIG_ADMIN_USER:-$USER}"
+    fw_default_in="${RIG_FIREWALL_DEFAULT_IN:-deny}"
+    fw_default_out="${RIG_FIREWALL_DEFAULT_OUT:-allow}"
+    check_listening_ports="${RIG_CHECK_LISTENING_PORTS:-yes}"
+    warn_undeclared_ports="${RIG_WARN_UNDECLARED_PORTS:-yes}"
+
+    if command -v rig_config_get >/dev/null 2>&1; then
+        rig_profile="$(rig_config_get RIG_PROFILE "$rig_profile")"
+        firewall="$(rig_config_get RIG_FIREWALL "$firewall")"
+        public_tcp="$(rig_config_get RIG_PUBLIC_TCP "$public_tcp")"
+        public_udp="$(rig_config_get RIG_PUBLIC_UDP "$public_udp")"
+        ssh_port="$(rig_config_get RIG_SSH_PORT "$ssh_port")"
+        ssh_root_login="$(rig_config_get RIG_SSH_ROOT_LOGIN "$ssh_root_login")"
+        ssh_password_auth="$(rig_config_get RIG_SSH_PASSWORD_AUTH "$ssh_password_auth")"
+        ssh_pubkey_auth="$(rig_config_get RIG_SSH_PUBKEY_AUTH "$ssh_pubkey_auth")"
+        ssh_access="$(rig_config_get RIG_SSH_ACCESS "$ssh_access")"
+        admin_user="$(rig_config_get RIG_ADMIN_USER "$admin_user")"
+        fw_default_in="$(rig_config_get RIG_FIREWALL_DEFAULT_IN "$fw_default_in")"
+        fw_default_out="$(rig_config_get RIG_FIREWALL_DEFAULT_OUT "$fw_default_out")"
+        check_listening_ports="$(rig_config_get RIG_CHECK_LISTENING_PORTS "$check_listening_ports")"
+        warn_undeclared_ports="$(rig_config_get RIG_WARN_UNDECLARED_PORTS "$warn_undeclared_ports")"
     fi
-    json+='    "codex": {\n'
-    json+="$(json_kv "model" "${codex_model}")"
+
+    json+='    "system": {\n'
+    json+="$(json_kv "profile" "$rig_profile")"
     json+=',\n'
-    json+="$(json_kv "reasoning_effort" "${codex_effort}")"
-    json+='\n    },\n'
-
-    # Gemini (informational only)
-    local gemini_model=""
-    if [[ -f "$HOME/.gemini/.env" ]]; then
-        gemini_model=$(grep '^GEMINI_MODEL=' "$HOME/.gemini/.env" 2>/dev/null | cut -d= -f2- || true)
-    fi
-    json+='    "gemini": {\n'
-    json+="$(json_kv "model" "${gemini_model}")"
+    json+="$(json_kv "container_mode" "$container_mode")"
+    json+=',\n'
+    json+="$(json_kv "firewall" "$firewall")"
+    json+=',\n'
+    json+="$(json_kv "firewall_default_in" "$fw_default_in")"
+    json+=',\n'
+    json+="$(json_kv "firewall_default_out" "$fw_default_out")"
+    json+=',\n'
+    json+="$(json_kv "public_tcp" "$public_tcp")"
+    json+=',\n'
+    json+="$(json_kv "public_udp" "$public_udp")"
+    json+=',\n'
+    json+="$(json_kv "ssh_port" "$ssh_port")"
+    json+=',\n'
+    json+="$(json_kv "ssh_root_login" "$ssh_root_login")"
+    json+=',\n'
+    json+="$(json_kv "ssh_password_auth" "$ssh_password_auth")"
+    json+=',\n'
+    json+="$(json_kv "ssh_pubkey_auth" "$ssh_pubkey_auth")"
+    json+=',\n'
+    json+="$(json_kv "ssh_access" "$ssh_access")"
+    json+=',\n'
+    json+="$(json_kv "admin_user" "$admin_user")"
+    json+=',\n'
+    json+="$(json_kv "check_listening_ports" "$check_listening_ports")"
+    json+=',\n'
+    json+="$(json_kv "warn_undeclared_ports" "$warn_undeclared_ports")"
     json+='\n    }\n'
 
     json+='  }\n'
@@ -282,36 +342,6 @@ extract_config() {
 
 extract_secrets() {
     local secrets=""
-
-    # Claude Code API
-    if [[ -f "$HOME/.claude/settings.json" ]]; then
-        local claude_url claude_key
-        claude_url=$(grep -o '"ANTHROPIC_BASE_URL"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.claude/settings.json" 2>/dev/null | sed 's/.*: *"//;s/"//' || true)
-        claude_key=$(grep -o '"ANTHROPIC_AUTH_TOKEN"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.claude/settings.json" 2>/dev/null | sed 's/.*: *"//;s/"//' || true)
-        [[ -n "$claude_url" ]] && secrets+="CLAUDE_API_URL=${claude_url}\n"
-        [[ -n "$claude_key" ]] && secrets+="CLAUDE_API_KEY=${claude_key}\n"
-    fi
-
-    # Codex API
-    if [[ -f "$HOME/.codex/auth.json" ]]; then
-        local codex_key
-        codex_key=$(grep -o '"OPENAI_API_KEY"[[:space:]]*:[[:space:]]*"[^"]*"' "$HOME/.codex/auth.json" 2>/dev/null | sed 's/.*: *"//;s/"//' || true)
-        [[ -n "$codex_key" ]] && secrets+="CODEX_API_KEY=${codex_key}\n"
-    fi
-    if [[ -f "$HOME/.codex/config.toml" ]]; then
-        local codex_url
-        codex_url=$(grep '^base_url[[:space:]]*=' "$HOME/.codex/config.toml" 2>/dev/null | head -1 | sed 's/.*=[[:space:]]*"//;s/".*//' || true)
-        [[ -n "$codex_url" ]] && secrets+="CODEX_API_URL=${codex_url}\n"
-    fi
-
-    # Gemini API
-    if [[ -f "$HOME/.gemini/.env" ]]; then
-        local gemini_url gemini_key
-        gemini_url=$(grep '^GOOGLE_GEMINI_BASE_URL=' "$HOME/.gemini/.env" 2>/dev/null | cut -d= -f2- || true)
-        gemini_key=$(grep '^GEMINI_API_KEY=' "$HOME/.gemini/.env" 2>/dev/null | cut -d= -f2- || true)
-        [[ -n "$gemini_url" ]] && secrets+="GEMINI_API_URL=${gemini_url}\n"
-        [[ -n "$gemini_key" ]] && secrets+="GEMINI_API_KEY=${gemini_key}\n"
-    fi
 
     # Tailscale auth key (if stored)
     if [[ -f "$HOME/.config/tailscale/auth_key" ]]; then

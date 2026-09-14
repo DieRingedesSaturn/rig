@@ -2,7 +2,36 @@
 
 [English](README.md)
 
-Linux 和 macOS 系统自动化配置脚本。
+Linux 和 macOS 自动化配置与轻量级 VPS 主机状态管理器 (Personal Server Baseline Manager)。
+
+### 这个程序具体会做什么？
+
+1. **扫描与审计系统现状 (Detect & Audit)**
+   - **端口暴露与容器审计**：执行 `ss -lntup` 扫描所有实际监听的 TCP/UDP 端口与绑定 IP，精确区分 `127.0.0.1`（本地内网）与 `0.0.0.0`（公网暴露），对比防火墙白名单，实时告警未声明却向公网暴露的 Docker/系统服务（防范 Docker 端口映射绕过 UFW 的隐患）；
+   - **安全基线体检**：检查是否存在非 root 管理员账号、是否具备 `sudo` 提权权限、`~/.ssh/authorized_keys` 是否有有效公钥，以及当前 `sshd_config` 中的 `PermitRootLogin` 与 `PasswordAuthentication` 状态；
+   - **运行环境冲突排查**：在部署 Node 前先排查系统自带的 `node`/`npm`，避免与 nvm 产生同版本或全局包路径冲突；自动检测发行版命令别名（如 Debian 的 `fdfind`、`batcat` 并创建软链接）。
+
+2. **安装核心软件包 (Install Packages)**
+   - **终端与基础环境**：通过系统原生包管理器（apt/dnf/pacman/brew）安装 `zsh`、`starship`、`tmux`、`git`、`neovim` (>= 0.9) 以及 zsh-autosuggestions、zsh-syntax-highlighting 插件；
+   - **日常 CLI 工具链**：安装 `ripgrep` (`rg`)、`jq`、`fd`、`bat`、`gh` (GitHub CLI)、`tree`、`shellcheck`、`curl`、`wget`、`unzip` 和构建工具（gcc/make/build-essential）；
+   - **开发运行态与容器**：安装 `nvm` 并拉取 Node.js LTS (v24)、安装 Python `uv` 包管理器；安装并配置 `docker-ce`（支持 rootless 用户态模式）或 `podman`；
+   - **组网与服务**：安装 `tailscale` 异地组网客户端、`openssh-server`，以及对应发行版的防火墙管理工具（Debian/Ubuntu 安装 `ufw`，Fedora/RHEL 安装 `firewalld`）。
+
+3. **写入与调整配置文件 (Config & Hardening)**
+   - **`/etc/ssh/sshd_config`**：在通过 `sshd -t` 语法预检的前提下，写入 `PermitRootLogin no`、`PasswordAuthentication no`、`PubkeyAuthentication yes`；
+   - **防火墙策略**：配置默认入站拒绝（`deny incoming`）、出站允许（`allow outgoing`），先放行 SSH 端口（限定 `tailscale0`，firewalld 使用独立的接口区域），再放行声明的业务端口（如 `80/tcp`, `443/tcp`）；
+   - **用户级配置文件**：
+     - `~/.config/nvim/init.lua`：写入零插件依赖的现代单文件 Lua 配置（Everforest 终端 16 色调色、本地与远程 OSC 52 剪贴板自适应），并将系统默认编辑器（`EDITOR`, `VISUAL`, `SUDO_EDITOR`, `update-alternatives`）设为 `nvim`，配置 `alias vim=nvim`；
+     - `~/.config/starship.toml`：写入简洁现代的终端提示符配置（Git 仓库路径锚定防超长、第一行尾随时间戳 `[HH:MM]`、感知 Python 虚拟环境与 Node.js 状态）；
+     - `~/.tmux.conf`：配置鼠标滚轮、大行数回滚缓冲，并自动适配系统剪贴板（Wayland 用 `wl-copy`、X11 用 `xclip`、macOS 用 `pbcopy`、无头服务器使用 OSC 52）；
+     - `~/.gitconfig`：配置默认分支 `init.defaultBranch=main`、`pull.rebase=true` 及用户名和邮箱；
+     - `~/.ssh/config`：按需注入 GitHub 443 端口代理隧道（使用 `corkscrew`）；
+     - `~/.config/rig/config`：持久化当前机器的组件清单与 Profile（如 `vps` 预设）。
+
+4. **安全底线与非侵入约束 (Safety Guarantees)**
+   - **绝不盲目覆盖用户配置**：若 `~/.zshrc`、`~/.config/starship.toml`、`~/.config/nvim` 已经存在，脚本仅做只读检查，绝不强制覆写；`setup-tmux.sh` 则提供彩色 Unified Diff 比对与交互式决策（支持保留原有 [Keep]、备份后覆盖 [Overwrite] 或追加 [Append]），杜绝任何暴力覆盖；
+   - **防失联硬性门禁 (Anti-Lockout)**：若未检测到具备 sudo 权限且拥有可用 SSH Key 的非 root 管理员，**程序硬性拒绝禁用 root 和密码登录**；
+   - **数据资产防误删**：卸载时默认保护 `~/.nvm`（防止多版本 Node 与全局 npm 包丢失）及 `~/.ssh/` 密钥。
 
 ## 支持的操作系统
 
@@ -20,7 +49,7 @@ Linux 和 macOS 系统自动化配置脚本。
 
 使用 `install.sh` 进行一站式交互或非交互安装。
 
-> **注意：** 安装完成后，`rig` CLI 会自动安装到 `~/.local/bin/rig`。之后可以使用 `rig status`、`rig export`、`rig uninstall` 等命令。详见 [管理工具文档](docs/zh/rig-management.md)。
+> **注意：** 安装完成后，`rig` CLI 会自动安装到 `~/.local/bin/rig`。之后可以使用 `rig status`、`rig security status`、`rig doctor`、`rig export`、`rig uninstall` 等命令。详见 [管理工具文档](docs/zh/rig-management.md)。
 
 <p align="center">
   <img src="assets/demo.gif" alt="install.sh 演示" width="700">
@@ -29,61 +58,47 @@ Linux 和 macOS 系统自动化配置脚本。
 交互式 TUI — 选择要安装的组件：
 
 ```bash
-curl -fsSL https://ba.sh/rig | bash
-# 或: curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh | bash
 ```
 
 通过代理（推荐国内用户）：
 
 ```bash
-curl -fsSL https://z.ls/rig | bash -s -- --gh-proxy https://gh-proxy.org
-# 或: curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/install.sh | bash -s -- --gh-proxy https://gh-proxy.org
+curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh | bash -s -- --gh-proxy https://gh-proxy.org
 ```
 
-> **💡 国内用户：** 建议先安装 Clash——安装脚本会将 `clashctl` 命令和 `watch_proxy` 写入 shell rc 文件，之后每个新终端会自动加载代理环境变量。启动代理后（`clashctl on`），后续所有 rig 脚本无需再加 `GH_PROXY`。
-> ```bash
-> # 订阅链接可选，也可以装完后再配置
-> curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-clash.sh | bash -s -- 'https://your-subscription-url'
-> # 然后启用代理：
-> source ~/.bashrc && clashctl on
-> ```
+> **💡 国内用户：** 这里所有下载都支持 `--gh-proxy` / `GH_PROXY`。设置一次，后续脚本都不用再加。
 
 非交互式安装全部：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/install.sh | bash -s -- --all
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh | bash -s -- --all
 ```
 
 指定组件：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/install.sh | bash -s -- --components shell,node,docker
-```
-
-预配置 API 密钥：
-
-```bash
-export CLAUDE_API_URL=https://your-api-url CLAUDE_API_KEY=your-key
-export CODEX_API_URL=https://your-api-url  CODEX_API_KEY=your-key
-export GEMINI_API_URL=https://your-api-url GEMINI_API_KEY=your-key
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/install.sh | bash -s -- --all
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh | bash -s -- --components shell,tools,neovim,containers,security
 ```
 
 详细模式（显示原始脚本输出而非 spinner）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/install.sh | bash -s -- --all --verbose
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh | bash -s -- --all --verbose
 ```
 
-可用组件：`shell`、`tmux`、`git`、`clash`、`node`、`uv`、`go`、`docker`、`tailscale`、`ssh`、`claude-code`、`codex`、`gemini`、`skills`
+可用组件：`shell`、`tmux`、`git`、`tools`、`neovim`、`node`、`uv`、`containers`、`tailscale`、`ssh`、`security`
 
 **新功能：** 使用预设快速安装常用配置：
 ```bash
-# AI 智能体开发环境 (shell, tools, git, node, claude-code, codex, gemini, skills)
-curl -fsSL https://ba.sh/rig | bash -s -- --preset agent
+# VPS 运维安全基线 (shell, git, tools, neovim, containers, tailscale, ssh, security)
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh | bash -s -- --preset vps
 
-# 查看所有预设：minimal（最小化）、agent（智能体）、devops（运维）、fullstack（全栈）
-# 文档：https://github.com/X-Zero-L/rig/blob/master/docs/zh/rig-management.md
+# 只预览该 Profile，不修改本机
+rig apply --profile vps --dry-run
+
+# 查看所有预设：minimal（最小化）、agent（智能体）、devops（运维）、vps（安全基线）、fullstack（全栈）
+# 文档：https://github.com/DieRingedesSaturn/rig/blob/master/docs/zh/rig-management.md
 ```
 
 ## 组件详解
@@ -91,11 +106,11 @@ curl -fsSL https://ba.sh/rig | bash -s -- --preset agent
 每个脚本也可以单独运行，支持直连和代理两种方式：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/<script> | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/<script> | bash
 ```
 
 ```bash
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/<script> | bash
+curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/<script> | bash
 ```
 
 ---
@@ -104,42 +119,43 @@ curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/m
 
 #### Shell 环境 (`setup-shell.sh`)
 
-安装 zsh、Oh My Zsh、插件（autosuggestions、syntax-highlighting、z）、Starship 提示符及 Catppuccin Powerline 主题。需要 `sudo`。
+安装 zsh、[Starship](https://starship.rs/) 和 autosuggestions + syntax-highlighting 两个插件——全部来自发行版包管理器。没有 Oh My Zsh、没有框架、不做 git clone。
+
+Linux 下需要 `sudo`（装包用）。
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-shell.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-shell.sh | bash
 ```
 
 通过代理：
 
 ```bash
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-shell.sh | bash
+curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-shell.sh | bash
 ```
+
+**这个组件绝不修改不是它自己创建的文件。** `~/.zshrc` 只读不写；`~/.config/starship.toml` 仅在缺失时创建（已存在就绝不覆盖，连应用预设都不会做）；默认 shell 只做报告、不做修改。任何需要改你文件才能完成的事，都会以清单形式打印出来让你自己决定。
+
+参考 [docs/zh/setup-shell.md](docs/zh/setup-shell.md)。
 
 #### Tmux (`setup-tmux.sh`)
 
-安装 [tmux](https://github.com/tmux/tmux)、[TPM](https://github.com/tmux-plugins/tpm) 插件管理器、[Catppuccin](https://github.com/catppuccin/tmux) 主题及常用插件（sensible、vim-tmux-navigator、yank、resurrect、continuum）。需要 `sudo`。
+安装 [tmux](https://github.com/tmux/tmux)，并且**仅在没有任何配置存在时**写入一份最小 `~/.tmux.conf`：扩展按键、鼠标支持、大回滚缓冲，以及一个按机器实际情况选择的剪贴板绑定。没有 TPM、没有 Catppuccin、没有插件。
 
-默认配置（不修改键位）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-tmux.sh | bash
-```
-
-启用自定义键位（Ctrl+a 前缀、`|` 和 `-` 分屏、vim 风格调整大小）：
+Linux 下需要 `sudo`。
 
 ```bash
-export TMUX_KEYBINDS=1
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-tmux.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-tmux.sh | bash
 ```
 
 通过代理：
 
 ```bash
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-tmux.sh | bash
+curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-tmux.sh | bash
 ```
 
-配置项：`TMUX_KEYBINDS`、`TMUX_MOUSE`、`TMUX_STATUS_POS`、`GH_PROXY` — 详见[配置速查表](#配置速查表)。
+**已存在的 `~/.tmux.conf` 绝不覆盖** —— 只做读取检查，缺什么会打印成清单。剪贴板绑定随机器自适应：Wayland 用 `wl-copy`、X11 用 `xclip`、macOS 用 `pbcopy`、无头 VPS 用 OSC 52（不需要任何外部命令）。
+
+配置项：`TMUX_MOUSE`、`TMUX_HISTORY_LIMIT` — 详见[配置速查表](#配置速查表)。
 
 #### Git (`setup-git.sh`)
 
@@ -148,62 +164,69 @@ curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/m
 ```bash
 export GIT_USER_NAME="Your Name"
 export GIT_USER_EMAIL="you@example.com"
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-git.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-git.sh | bash
 ```
 
 配置项：`GIT_USER_NAME`、`GIT_USER_EMAIL` — 详见[配置速查表](#配置速查表)。
 
-#### Clash 代理 (`setup-clash.sh`)
+#### 基础工具 (`setup-tools.sh`)
 
-安装 [clash-for-linux](https://github.com/nelvko/clash-for-linux-install)，支持传入订阅链接。
+安装日常 CLI 工具集：`rg`、`jq`、`fd`、`bat`、`tree`、`shellcheck`、`fastfetch`、`gh`、`wget`、`unzip`，以及构建工具（gcc/make）。
 
-传入订阅链接：
+剪贴板工具由**会话检测**决定，而非写死 —— `xclip` 是 X11 程序，在 Wayland 或无头服务器上毫无作用：
+
+| 会话 | 工具 | 包 |
+|------|------|-----|
+| macOS | `pbcopy` | 系统自带 |
+| Wayland | `wl-copy` | `wl-clipboard` |
+| X11 | `xclip` | `xclip` |
+| 无头 / VPS | 无 | 不安装 |
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-clash.sh | bash -s -- 'https://your-subscription-url'
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-tools.sh | bash
 ```
 
-通过环境变量：
+可用 `RIG_CLIPBOARD_TOOL=auto|pbcopy|wl-copy|xclip|none` 强制指定或关闭。
+
+配置项：`RIG_CLIPBOARD_TOOL` — 详见[配置速查表](#配置速查表)。
+
+#### Containers (`setup-containers.sh`)
+
+一个组件，两个可互换的后端。安装 **Podman** 或 **Docker**，选择依据来自你的配置：
+
+| # | 来源 | 结果 |
+|---|------|------|
+| 1 | `RIG_CONTAINER_ENGINE` | `podman` / `docker` —— 永远最高 |
+| 2 | 已安装的唯一后端 | 已有 Podman 就保留 Podman；已有 Docker 就保留 Docker |
+| 3 | `RIG_PROFILE` | `desktop` → Podman，`vps` → Docker |
+| 4 | OS 默认 | Fedora/Arch → Podman，Debian/RHEL → Docker |
+
+`RIG_CONTAINER_MODE` 选择 `rootless`（默认）或 `rootful`。显式配置始终优先；自动模式把 Podman/Docker 当作二选一，不会在已有 Podman 时再自动安装 Docker。Docker rootless 缺少可用的 systemd user session 时，交互模式会让用户选择保留 Podman、改用 rootful Docker，或停止后先修复 session。
+
+Linux 下需要 `sudo`。
 
 ```bash
-export CLASH_SUB_URL='https://your-subscription-url'
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-clash.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-containers.sh | bash
+```
+
+在命令行直接指定后端：
+
+```bash
+RIG_CONTAINER_ENGINE=podman RIG_CONTAINER_MODE=rootless \
+  bash <(curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-containers.sh)
 ```
 
 通过代理：
 
 ```bash
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-clash.sh | bash -s -- 'https://your-subscription-url'
+curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-containers.sh | bash
 ```
 
-配置项：`CLASH_SUB_URL`、`CLASH_KERNEL`、`CLASH_GH_PROXY` — 详见[配置速查表](#配置速查表)。
+Podman 是 daemonless 的：一个包，没有服务需要 enable。Rootless Docker 是 `systemctl --user` 下的用户级 daemon，数据在 `~/.local/share/docker`、配置在 `~/.config/docker/daemon.json` —— 不是 `/etc/docker`。脚本会启用 linger，让它在无头 VPS 重启后依然存活。
 
-#### Docker (`setup-docker.sh`)
+`rig status` 只报告选中的那一个后端，例如 `Podman 5.8.4 (rootless)`。
 
-安装 [Docker Engine](https://docs.docker.com/engine/install/)、Compose 插件，配置镜像加速、日志轮转、地址池和可选代理。需要 `sudo`。
-
-默认配置（不含镜像加速，海外机器直接用）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-docker.sh | bash
-```
-
-自定义配置：
-
-```bash
-export DOCKER_MIRROR=https://mirror.example.com
-export DOCKER_DATA_ROOT=/data/docker
-export DOCKER_PROXY=http://localhost:7890
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-docker.sh | bash
-```
-
-通过代理：
-
-```bash
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-docker.sh | bash
-```
-
-配置项：`DOCKER_MIRROR`、`DOCKER_PROXY`、`DOCKER_DATA_ROOT`、`DOCKER_LOG_SIZE` 等 — 详见[配置速查表](#配置速查表)。
+配置项：`RIG_CONTAINER_ENGINE`、`RIG_CONTAINER_MODE`、`RIG_PROFILE`、`PODMAN_REGISTRY_MIRRORS`、`DOCKER_MIRROR`、`DOCKER_LOG_SIZE`、`DOCKER_LOG_FILES` — 详见[配置速查表](#配置速查表)。
 
 #### Tailscale (`setup-tailscale.sh`)
 
@@ -212,14 +235,14 @@ curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/m
 仅安装：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-tailscale.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-tailscale.sh | bash
 ```
 
 安装并自动连接：
 
 ```bash
 export TAILSCALE_AUTH_KEY=tskey-auth-xxxxx
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-tailscale.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-tailscale.sh | bash
 ```
 
 #### SSH (`setup-ssh.sh`)
@@ -229,7 +252,7 @@ curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-tailscale
 仅确保 sshd 运行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-ssh.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-ssh.sh | bash
 ```
 
 修改端口 + 启用密钥登录：
@@ -237,17 +260,21 @@ curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-ssh.sh | 
 ```bash
 export SSH_PORT=2222
 export SSH_PUBKEY="ssh-ed25519 AAAA..."
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-ssh.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-ssh.sh | bash
 ```
 
 配置 GitHub SSH 代理（22 端口被封或需要走代理时）：
 
 ```bash
 export SSH_PROXY_PORT=7890
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-ssh.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-ssh.sh | bash
 ```
 
 配置项：`SSH_PORT`、`SSH_PUBKEY`、`SSH_PROXY_PORT` — 详见[配置速查表](#配置速查表)。
+
+`setup-security.sh` 在交互终端中会分别确认 SSH 是公网访问还是仅限 Tailscale，以及除 SSH 外还要开放哪些公网 TCP 端口。默认不再自动加入 80/443；输入 `none` 可清空额外公网端口。成功应用后的选择会写入 Rig 配置。
+
+Rig 创建的用户级和系统级配置备份统一放在 `~/.local/share/rig/backups/{user,system}/`，不会散落在原文件旁。
 
 ---
 
@@ -260,20 +287,20 @@ curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-ssh.sh | 
 默认安装 Node.js 24：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-node.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-node.sh | bash
 ```
 
 指定版本：
 
 ```bash
 export NODE_VERSION=22
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-node.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-node.sh | bash
 ```
 
 通过代理：
 
 ```bash
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-node.sh | bash
+curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-node.sh | bash
 ```
 
 #### uv + Python (`setup-uv.sh`)
@@ -283,176 +310,23 @@ curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/m
 仅安装 uv：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-uv.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-uv.sh | bash
 ```
 
 uv + Python：
 
 ```bash
 export UV_PYTHON=3.12
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-uv.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-uv.sh | bash
 ```
 
 通过代理：
 
 ```bash
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-uv.sh | bash
-```
-
-#### Go (`setup-go.sh`)
-
-安装 [goenv](https://github.com/go-nv/goenv) 和 Go。
-
-默认安装最新版 Go：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-go.sh | bash
-```
-
-指定版本：
-
-```bash
-export GO_VERSION=1.23.0
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-go.sh | bash
-```
-
-通过代理：
-
-```bash
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-go.sh | GH_PROXY=https://gh-proxy.org bash
+curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-uv.sh | bash
 ```
 
 ---
-
-### AI 编码代理
-
-三个代理脚本共享相同的行为模式：
-
-- **有 API 密钥** → 安装工具 + 写入配置（已配置且一致则跳过）
-- **无 API 密钥** → 仅安装工具，稍后手动配置
-- **携带密钥重复运行** → 跳过安装，检查配置并按需更新
-
-#### Claude Code (`setup-claude-code.sh`)
-
-安装 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI。别名：`cc`。
-
-安装 + 配置：
-
-```bash
-export CLAUDE_API_URL=https://your-api-url
-export CLAUDE_API_KEY=your-key
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-claude-code.sh | bash
-```
-
-只安装不配置（稍后配置）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-claude-code.sh | bash
-```
-
-通过命令行参数：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-claude-code.sh | bash -s -- --api-url https://your-api-url --api-key your-key
-```
-
-通过代理：
-
-```bash
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-claude-code.sh | bash
-```
-
-配置项：`CLAUDE_API_URL`、`CLAUDE_API_KEY`、`CLAUDE_MODEL`、`CLAUDE_NPM_MIRROR` — 详见[配置速查表](#配置速查表)。
-
-#### Codex CLI (`setup-codex.sh`)
-
-安装 [Codex CLI](https://github.com/openai/codex)。别名：`cx`。
-
-安装 + 配置：
-
-```bash
-export CODEX_API_URL=https://your-api-url
-export CODEX_API_KEY=your-key
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-codex.sh | bash
-```
-
-只安装不配置（稍后配置）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-codex.sh | bash
-```
-
-通过命令行参数：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-codex.sh | bash -s -- --api-url https://your-api-url --api-key your-key
-```
-
-通过代理：
-
-```bash
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-codex.sh | bash
-```
-
-配置项：`CODEX_API_URL`、`CODEX_API_KEY`、`CODEX_MODEL`、`CODEX_EFFORT`、`CODEX_NPM_MIRROR` — 详见[配置速查表](#配置速查表)。
-
-#### Gemini CLI (`setup-gemini.sh`)
-
-安装 [Gemini CLI](https://github.com/google-gemini/gemini-cli)。别名：`gm`。
-
-安装 + 配置：
-
-```bash
-export GEMINI_API_URL=https://your-api-url
-export GEMINI_API_KEY=your-key
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-gemini.sh | bash
-```
-
-只安装不配置（稍后配置）：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-gemini.sh | bash
-```
-
-通过命令行参数：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-gemini.sh | bash -s -- --api-url https://your-api-url --api-key your-key
-```
-
-通过代理：
-
-```bash
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-gemini.sh | bash
-```
-
-配置项：`GEMINI_API_URL`、`GEMINI_API_KEY`、`GEMINI_MODEL`、`GEMINI_NPM_MIRROR` — 详见[配置速查表](#配置速查表)。
-
-#### 代理技能 (`setup-skills.sh`)
-
-为所有编码代理全局安装常用 [agent skills](https://skills.sh/)。
-
-| 技能 | 来源 | 说明 |
-|------|------|------|
-| `find-skills` | [vercel-labs/skills](https://github.com/vercel-labs/skills) | 发现和安装代理技能 |
-| `pdf` | [anthropics/skills](https://github.com/anthropics/skills) | PDF 读取和处理 |
-| `gemini-cli` | [X-Zero-L/agent-skills](https://github.com/X-Zero-L/agent-skills) | Gemini CLI 集成 |
-| `context7` | [intellectronica/agent-skills](https://github.com/intellectronica/agent-skills) | 库文档查询 |
-| `writing-plans` | [obra/superpowers](https://github.com/obra/superpowers) | 编写实现计划 |
-| `executing-plans` | [obra/superpowers](https://github.com/obra/superpowers) | 带检查点的计划执行 |
-| `codex` | [softaworks/agent-toolkit](https://github.com/softaworks/agent-toolkit) | Codex 代理技能 |
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-skills.sh | bash
-```
-
-通过代理：
-
-```bash
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-skills.sh | bash
-```
-
-配置项：`SKILLS_NPM_MIRROR` — 详见[配置速查表](#配置速查表)。
 
 ## 配置速查表
 
@@ -468,9 +342,8 @@ curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/m
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `TMUX_KEYBINDS` | `0` | 启用自定义键位：Ctrl+a 前缀、\| 和 - 分屏、vim 风格调整大小（设为 `1` 启用） |
 | `TMUX_MOUSE` | `1` | 启用鼠标支持（设为 `0` 禁用） |
-| `TMUX_STATUS_POS` | `top` | 状态栏位置（`top` 或 `bottom`） |
+| `TMUX_HISTORY_LIMIT` | `100000` | 回滚缓冲行数 |
 
 ### Git
 
@@ -478,14 +351,6 @@ curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/m
 |------|--------|------|
 | `GIT_USER_NAME` | _（空）_ | `git config --global user.name` 的值 |
 | `GIT_USER_EMAIL` | _（空）_ | `git config --global user.email` 的值 |
-
-### Clash
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `CLASH_SUB_URL` | _（空）_ | 订阅链接（也可作为第一个参数传入） |
-| `CLASH_KERNEL` | `mihomo` | 代理内核（`mihomo` 或 `clash`） |
-| `CLASH_GH_PROXY` | `https://gh-proxy.org` | GitHub 加速代理（设为空字符串可禁用） |
 
 ### Node.js
 
@@ -501,26 +366,48 @@ curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/m
 |------|--------|------|
 | `UV_PYTHON` | _（空）_ | 要安装的 Python 版本（也可作为第一个参数传入） |
 
-### Go
+### 基础工具
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `GO_VERSION` | `latest` | 要安装的 Go 版本（也可作为第一个参数传入） |
-| `GO_BUILD_MIRROR_URL` | _（空）_ | Go 二进制下载镜像。设置 `GH_PROXY` 时自动启用。 |
+| `RIG_CLIPBOARD_TOOL` | `auto` | 要安装的剪贴板工具：`auto`、`pbcopy`、`wl-copy`、`xclip` 或 `none` |
 
-### Docker
+### Containers
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `DOCKER_MIRROR` | _（空）_ | 镜像加速地址，多个用逗号分隔。通过 `install.sh` 的 `--gh-proxy` 安装时自动设为 `https://docker.1ms.run` |
-| `DOCKER_PROXY` | _（空）_ | 守护进程和容器的 HTTP/HTTPS 代理 |
-| `DOCKER_NO_PROXY` | `localhost,127.0.0.0/8` | 不走代理的地址列表 |
-| `DOCKER_DATA_ROOT` | _（空）_ | Docker 数据存储目录（默认 `/var/lib/docker`） |
-| `DOCKER_LOG_SIZE` | `20m` | 单个日志文件最大大小 |
-| `DOCKER_LOG_FILES` | `3` | 最多保留日志文件数 |
-| `DOCKER_EXPERIMENTAL` | `1` | 启用实验性功能（设为 `0` 禁用） |
-| `DOCKER_ADDR_POOLS` | `172.17.0.0/12:24,192.168.0.0/16:24` | 默认地址池（`base/cidr:size`，逗号分隔） |
-| `DOCKER_COMPOSE` | `1` | 安装 docker-compose-plugin（设为 `0` 跳过） |
+| `RIG_CONTAINER_ENGINE` | `auto` | `auto`、`podman` 或 `docker`。显式值优先于其他一切规则 |
+| `RIG_CONTAINER_MODE` | `rootless` | `rootless` 或 `rootful` |
+| `RIG_PROFILE` | _（空）_ | `desktop`（→ Podman）或 `vps`（→ Docker） |
+| `PODMAN_REGISTRY_MIRRORS` | _（空）_ | Podman 的镜像加速地址，逗号分隔 |
+| `DOCKER_MIRROR` | _（空）_ | Docker 的镜像加速地址，逗号分隔 |
+| `DOCKER_LOG_SIZE` | `20m` | 单个日志文件最大大小（Docker） |
+| `DOCKER_LOG_FILES` | `3` | 最多保留日志文件数（Docker） |
+
+### 配置文件
+
+`~/.config/rig/config` 存放跨命令生效的设置。它是**解析**的，不会被 source；同名环境变量可以覆盖它：
+
+```bash
+RIG_PROFILE="desktop"
+RIG_CONTAINER_ENGINE="auto"
+RIG_CONTAINER_MODE="rootless"
+
+RIG_COMPONENTS="
+shell
+tmux
+git
+containers
+"
+```
+
+| 键 | 说明 |
+|----|------|
+| `RIG_COMPONENTS` | 未指定 `--all` / `--components` / `--preset` 时，`rig install` 的默认组件列表 |
+| `RIG_PROFILE` | `desktop` 或 `vps` |
+| `RIG_CONTAINER_ENGINE` | `auto`、`podman` 或 `docker` |
+| `RIG_CONTAINER_MODE` | `rootless` 或 `rootful` |
+| `RIG_CLIPBOARD_TOOL` | `auto`、`pbcopy`、`wl-copy`、`xclip` 或 `none` |
 
 ### Tailscale
 
@@ -533,88 +420,40 @@ curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/m
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `SSH_PORT` | _（空）_ | 自定义 SSH 端口。留空则不修改。 |
-| `SSH_PUBKEY` | _（空）_ | 公钥字符串。设置后添加密钥并禁用密码登录。 |
+| `SSH_PUBKEY` | _（空）_ | 公钥字符串。设置后添加公钥至 authorized_keys（密码与账号安全加固由 security 统一执行）。 |
 | `SSH_PRIVATE_KEY` | _（空）_ | 私钥内容。设置后导入到 `~/.ssh/`，用于对外 SSH 连接。 |
 | `SSH_PROXY_HOST` | `127.0.0.1` | 代理主机地址。仅在设置了 `SSH_PROXY_PORT` 时生效。 |
 | `SSH_PROXY_PORT` | _（空）_ | 代理端口（如 `7890`）。配置 GitHub SSH 通过 `ssh.github.com:443` + corkscrew 代理连接。 |
-
-### Claude Code
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `CLAUDE_API_URL` | _（空）_ | API 基础地址（留空则只安装不配置） |
-| `CLAUDE_API_KEY` | _（空）_ | 认证令牌（留空则只安装不配置） |
-| `CLAUDE_MODEL` | `opus` | 模型名称 |
-| `CLAUDE_NPM_MIRROR` | _（空）_ | npm 镜像源。设置 `GH_PROXY` 时自动启用。 |
-
-### Codex CLI
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `CODEX_API_URL` | _（空）_ | API 基础地址（留空则只安装不配置） |
-| `CODEX_API_KEY` | _（空）_ | API 密钥（留空则只安装不配置） |
-| `CODEX_MODEL` | `gpt-5.2` | 模型名称 |
-| `CODEX_EFFORT` | `xhigh` | 推理强度 |
-| `CODEX_NPM_MIRROR` | _（空）_ | npm 镜像源。设置 `GH_PROXY` 时自动启用。 |
-
-### Gemini CLI
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `GEMINI_API_URL` | _（空）_ | API 基础地址（留空则只安装不配置） |
-| `GEMINI_API_KEY` | _（空）_ | API 密钥（留空则只安装不配置） |
-| `GEMINI_MODEL` | `gemini-3-pro-preview` | 模型名称 |
-| `GEMINI_NPM_MIRROR` | _（空）_ | npm 镜像源。设置 `GH_PROXY` 时自动启用。 |
-
-### 代理技能
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `SKILLS_NPM_MIRROR` | _（空）_ | npm 镜像源。设置 `GH_PROXY` 时自动启用。 |
 
 ## 从零开始
 
 全新机器的完整配置流程。推荐顺序确保依赖关系正确。
 
-**1. 代理**（后续下载更快）
+**1. 代理**（后续下载更快 —— 换成你自己的代理地址）
 
 ```bash
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/X-Zero-L/rig/master/setup-clash.sh | bash -s -- 'https://your-subscription-url'
+export GH_PROXY=https://gh-proxy.org
 ```
 
-```bash
-source ~/.bashrc && clashon
-```
-
-**2. 准备 API 密钥**（可选 — 省略则只安装工具不配置）
+**2. 一键安装**
 
 ```bash
-export CLAUDE_API_URL=https://your-api-url CLAUDE_API_KEY=your-key
-export CODEX_API_URL=https://your-api-url  CODEX_API_KEY=your-key
-export GEMINI_API_URL=https://your-api-url GEMINI_API_KEY=your-key
-```
-
-**3. 一键安装**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/install.sh | bash -s -- --all
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh | bash -s -- --all
 ```
 
 或按以下顺序逐个安装：
 
-1. `setup-shell.sh` — Shell 环境（zsh、插件、Starship）
-2. `setup-tmux.sh` — Tmux + Catppuccin + 插件
+1. `setup-shell.sh` — Shell 环境（zsh、Starship、插件，无框架）
+2. `setup-tmux.sh` — Tmux + 鼠标 + 回滚缓冲（带 Diff 对比与交互决策）
 3. `setup-git.sh` — Git 用户身份 + 默认值
-4. `setup-ssh.sh` — SSH 端口 + 密钥登录
-5. `setup-docker.sh` — Docker Engine + Compose
-6. `setup-tailscale.sh` — Tailscale VPN
+4. `setup-tools.sh` — 核心 CLI 基础工具链（rg, jq, fd, bat, gh 等）
+5. `setup-neovim.sh` — 现代轻量 Neovim 配置与默认编辑器
+6. `setup-node.sh` — nvm + Node.js
 7. `setup-uv.sh` — uv + Python
-8. `setup-go.sh` — goenv + Go
-9. `setup-node.sh` — nvm + Node.js
-10. `setup-claude-code.sh` — Claude Code
-11. `setup-codex.sh` — Codex CLI
-12. `setup-gemini.sh` — Gemini CLI
-13. `setup-skills.sh` — 代理技能
+8. `setup-containers.sh` — Podman 或 Docker 后端
+9. `setup-tailscale.sh` — Tailscale VPN 组网
+10. `setup-ssh.sh` — OpenSSH 服务安装与客户端配置
+11. `setup-security.sh` — 安全加固核心模块（防 Lockout、防火墙、端口审计）
 
 ## 详细文档
 
@@ -624,9 +463,8 @@ curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/install.sh | ba
 
 macOS 支持有以下差异：
 
-- **Docker**: 使用 Docker Desktop 而非 Docker Engine。`setup-docker.sh` 脚本通过 Homebrew 安装，不配置 systemd 服务（macOS 不使用 systemd）。
+- **Containers**: macOS 上 Podman 在 Linux 虚拟机里运行容器，因此脚本只打印 `podman machine init` / `start` 命令，不会静默下载 VM 镜像。macOS 上的 Docker 指 Docker Desktop，没有 rootless 模式。
 - **SSH**: 使用 macOS Remote Login 而非通过 `systemctl` 配置 OpenSSH 服务器。
-- **Clash 代理**: 不支持 macOS（仅限 Linux）。
 - **Homebrew**: 若未安装会自动安装。脚本会自动检测并使用 `brew` 而非 `apt`/`yum`/`dnf`/`pacman`。
 - **sudo**: 部分 Homebrew 操作不需要 sudo。脚本会自动处理。
 
@@ -635,4 +473,3 @@ macOS 支持有以下差异：
 - Starship 需要终端支持 [Nerd Font](https://www.nerdfonts.com/) 才能正常显示图标。
 - 如果 `gh-proxy.org` 不可用，可到 [ghproxy.link](https://ghproxy.link/) 查找其他可用代理。
 - 携带不同的 API 密钥/配置重新运行脚本，会自动更新配置而不重复安装。
-- **仅限 Linux 组件**: Clash 代理仅在 Linux 系统上可用。

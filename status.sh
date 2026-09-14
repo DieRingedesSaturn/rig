@@ -18,18 +18,34 @@ source "$SCRIPT_DIR/lib/os-detect.sh"
 source "$SCRIPT_DIR/lib/pkg-maps.sh"
 # shellcheck source=lib/pkg-manager.sh
 source "$SCRIPT_DIR/lib/pkg-manager.sh"
+# shellcheck source=lib/rig-config.sh
+source "$SCRIPT_DIR/lib/rig-config.sh"
+# shellcheck source=lib/containers.sh
+source "$SCRIPT_DIR/lib/containers.sh"
+# shellcheck source=lib/tools.sh
+source "$SCRIPT_DIR/lib/tools.sh"
+# shellcheck source=lib/firewall.sh
+source "$SCRIPT_DIR/lib/firewall.sh"
+# shellcheck source=lib/security.sh
+source "$SCRIPT_DIR/lib/security.sh"
+# shellcheck source=lib/backup.sh
+source "$SCRIPT_DIR/lib/backup.sh"
 
 # --- Options -----------------------------------------------------------------
 
 OUTPUT_FORMAT="table"
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --json)  OUTPUT_FORMAT="json"; shift ;;
-        --short) OUTPUT_FORMAT="short"; shift ;;
+        --json)               OUTPUT_FORMAT="json"; shift ;;
+        --short)              OUTPUT_FORMAT="short"; shift ;;
+        --security|security)  OUTPUT_FORMAT="security"; shift ;;
+        --doctor|doctor)      OUTPUT_FORMAT="doctor"; shift ;;
         --help|-h)
-            echo "Usage: status.sh [--json|--short|--help]"
-            echo "  --json   Machine-readable JSON output"
-            echo "  --short  One-line summary"
+            echo "Usage: status.sh [--json|--short|--security|--doctor|--help]"
+            echo "  --json       Machine-readable JSON output"
+            echo "  --short      One-line summary"
+            echo "  --security   Security baseline & listening ports audit"
+            echo "  --doctor     Full health and security diagnostic report"
             exit 0
             ;;
         *) shift ;;
@@ -71,8 +87,6 @@ resolve_cmd() {
     local extra_paths=(
         "$HOME/.local/bin"
         "$HOME/.nvm/versions/node"/*/bin
-        "$HOME/.goenv/shims"
-        "$HOME/.goenv/bin"
         "/usr/local/bin"
         "$HOME/.cargo/bin"
     )
@@ -113,24 +127,34 @@ detect_shell() {
         status="installed"
         config="install-only"
 
-        # Check if zsh is the default shell
+        # zsh as the login shell
         local current_shell
         current_shell=$(getent passwd "$USER" 2>/dev/null | cut -d: -f7 || echo "$SHELL")
         local is_default=0
         [[ "$current_shell" == *zsh* ]] && is_default=1
 
-        # Check Oh My Zsh
-        local has_omz=0
-        [[ -d "$HOME/.oh-my-zsh" && -f "$HOME/.oh-my-zsh/oh-my-zsh.sh" ]] && has_omz=1
-
-        # Check Starship
+        # Starship
         local has_starship=0
         local starship_path
         starship_path=$(resolve_cmd starship) && has_starship=1
 
-        if [[ $is_default -eq 1 && $has_omz -eq 1 && $has_starship -eq 1 ]]; then
+        # This component never edits ~/.zshrc, so "configured" means the rc file
+        # actually loads what we installed. Comment lines are ignored so a
+        # commented-out entry is not mistaken for an active one.
+        local zshrc="$HOME/.zshrc"
+        local rc_ok=1
+        if [[ -f "$zshrc" ]]; then
+            local pattern
+            for pattern in 'zsh-autosuggestions' 'zsh-syntax-highlighting' 'starship init'; do
+                grep -n "$pattern" "$zshrc" 2>/dev/null | grep -qv ':[[:space:]]*#' || rc_ok=0
+            done
+        else
+            rc_ok=0
+        fi
+
+        if [[ $is_default -eq 1 && $has_starship -eq 1 && $rc_ok -eq 1 ]]; then
             config="configured"
-        elif [[ $has_omz -eq 1 || $has_starship -eq 1 ]]; then
+        elif [[ $has_starship -eq 1 || $rc_ok -eq 1 ]]; then
             status="partial"
             config="install-only"
         fi
@@ -148,23 +172,28 @@ detect_tmux() {
         status="installed"
         config="install-only"
 
-        # Check TPM
-        local has_tpm=0
-        [[ -d "$HOME/.tmux/plugins/tpm" ]] && has_tpm=1
+        # This component installs no plugins; "configured" means a config file
+        # exists and carries the settings the generated template provides.
+        local conf="" candidate
+        for candidate in "${XDG_CONFIG_HOME:-$HOME/.config}/tmux/tmux.conf" "$HOME/.tmux.conf"; do
+            if [[ -f "$candidate" ]]; then
+                conf="$candidate"
+                break
+            fi
+        done
 
-        # Check config file
-        local has_conf=0
-        [[ -f "$HOME/.tmux.conf" ]] && has_conf=1
-
-        # Check Catppuccin theme plugin
-        local has_theme=0
-        [[ -d "$HOME/.tmux/plugins/tmux" ]] && has_theme=1
-
-        if [[ $has_tpm -eq 1 && $has_conf -eq 1 && $has_theme -eq 1 ]]; then
-            config="configured"
-        elif [[ $has_tpm -eq 1 || $has_conf -eq 1 ]]; then
-            status="partial"
-            config="install-only"
+        if [[ -n "$conf" ]]; then
+            # Comment lines are ignored so a commented-out entry is not counted.
+            local rc_lines wanted missing=0
+            for wanted in 'extended-keys' 'mouse' 'history-limit'; do
+                rc_lines="$(grep -n "$wanted" "$conf" 2>/dev/null | grep -v ':[[:space:]]*#' || true)"
+                [[ -n "$rc_lines" ]] || missing=1
+            done
+            if [[ $missing -eq 0 ]]; then
+                config="configured"
+            else
+                status="partial"
+            fi
         fi
     fi
 
@@ -198,8 +227,14 @@ detect_git() {
 detect_tools() {
     local status="not_installed" version="N/A" config="not-configured"
 
-    # Essential tools installed by setup-tools.sh
-    local tools=(rg jq fd bat tree shellcheck gh wget unzip xclip)
+    # Essential tools installed by setup-tools.sh.
+    # The clipboard helper is session-dependent, so only the applicable one is
+    # expected — expecting xclip on a Wayland box would report a permanent
+    # false gap on a correctly provisioned machine.
+    local tools=(rg jq fd bat tree shellcheck gh wget unzip fastfetch)
+    local clipboard_tool
+    clipboard_tool="$(tools_clipboard_tool)"
+    [[ -n "$clipboard_tool" ]] && tools+=("$clipboard_tool")
     local found=0
     local total=${#tools[@]}
     local missing_tools=()
@@ -235,32 +270,61 @@ detect_tools() {
 detect_node() {
     local status="not_installed" version="N/A" config="not-configured"
 
-    # Load nvm if available
-    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-    # shellcheck disable=SC1091
-    [[ -f "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh" 2>/dev/null
+    local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
 
-    local has_nvm=0
-    local has_node=0
+    # System Node first, because loading nvm.sh puts the nvm version in front of
+    # it on PATH. A distro package with the same major version as the nvm one is
+    # exactly the case that goes unnoticed, and a machine can have both.
+    local system_node="" system_version=""
+    local candidate
+    while IFS= read -r candidate; do
+        [[ -z "$candidate" ]] && continue
+        case "$candidate" in
+            "$nvm_dir"/*) continue ;;
+        esac
+        system_node="$candidate"
+        break
+    done < <(type -a -p node 2>/dev/null || true)
 
-    [[ -f "$NVM_DIR/nvm.sh" ]] && has_nvm=1
-
-    local node_path
-    if node_path=$(resolve_cmd node); then
-        has_node=1
-        version=$("$node_path" --version 2>/dev/null | head -1 | sed 's/^v//' || echo "N/A")
+    if [[ -n "$system_node" ]]; then
+        system_version="$("$system_node" --version 2>/dev/null | sed 's/^v//' || true)"
     fi
 
-    if [[ $has_nvm -eq 1 && $has_node -eq 1 ]]; then
+    # nvm-managed version, if nvm has one active.
+    local has_nvm=0 nvm_version=""
+    if [[ -f "$nvm_dir/nvm.sh" ]]; then
+        has_nvm=1
+        export NVM_DIR="$nvm_dir"
+        # shellcheck disable=SC1091
+        . "$nvm_dir/nvm.sh" >/dev/null 2>&1 || true
+        local current
+        current="$(nvm current 2>/dev/null || true)"
+        case "$current" in
+            ''|none|system) ;;
+            *) nvm_version="${current#v}" ;;
+        esac
+    fi
+
+    # Report both when both exist — "two Node 24s" is worth seeing.
+    if [[ -n "$nvm_version" && -n "$system_version" ]]; then
+        version="${nvm_version} + system ${system_version}"
+    elif [[ -n "$nvm_version" ]]; then
+        version="${nvm_version}"
+    elif [[ -n "$system_version" ]]; then
+        version="${system_version} (system)"
+    fi
+
+    if [[ $has_nvm -eq 1 && -n "$nvm_version" ]]; then
         status="installed"
         config="configured"
-    elif [[ $has_nvm -eq 1 ]]; then
+    elif [[ $has_nvm -eq 1 || -n "$system_version" ]]; then
+        # nvm present without an active version, or only a distro Node: usable,
+        # but not the nvm-managed setup this component provides.
         status="partial"
         config="install-only"
-        version="nvm only"
-    elif [[ $has_node -eq 1 ]]; then
-        status="partial"
-        config="install-only"
+        if [[ "$version" == "N/A" ]]; then
+            version="nvm only"
+        fi
     fi
 
     echo "${status}|${version}|${config}"
@@ -282,36 +346,36 @@ detect_uv() {
     echo "${status}|${version}|${config}"
 }
 
-detect_go() {
+detect_podman() {
     local status="not_installed" version="N/A" config="not-configured"
 
-    # Load goenv if available
-    if [[ -d "$HOME/.goenv" ]]; then
-        export GOENV_ROOT="$HOME/.goenv"
-        export PATH="$GOENV_ROOT/bin:$GOENV_ROOT/shims:$PATH"
-    fi
+    local podman_path
+    if podman_path=$(resolve_cmd podman); then
+        local ver rootless
+        ver=$("$podman_path" --version 2>/dev/null | awk '{print $3}' || true)
+        version="Podman ${ver:-?}"
 
-    local has_goenv=0
-    local has_go=0
-
-    [[ -d "$HOME/.goenv" && -f "$HOME/.goenv/bin/goenv" ]] && has_goenv=1
-
-    local go_path
-    if go_path=$(resolve_cmd go); then
-        has_go=1
-        version=$("$go_path" version 2>/dev/null | head -1 | sed 's/go version go//' | awk '{print $1}' || echo "N/A")
-    fi
-
-    if [[ $has_goenv -eq 1 && $has_go -eq 1 ]]; then
-        status="installed"
-        config="configured"
-    elif [[ $has_goenv -eq 1 ]]; then
-        status="partial"
-        config="install-only"
-        version="goenv only"
-    elif [[ $has_go -eq 1 ]]; then
-        status="partial"
-        config="install-only"
+        # Podman reports its own privilege state, so this is authoritative
+        # rather than inferred from group membership.
+        rootless=$("$podman_path" info --format '{{.Host.Security.Rootless}}' 2>/dev/null || true)
+        case "$rootless" in
+            true)
+                version="${version} (rootless)"
+                status="installed"
+                config="configured"
+                ;;
+            false)
+                version="${version} (rootful)"
+                status="installed"
+                config="configured"
+                ;;
+            *)
+                # Binary present but `podman info` failed — usually a broken
+                # subuid/subgid allocation.
+                status="partial"
+                config="install-only"
+                ;;
+        esac
     fi
 
     echo "${status}|${version}|${config}"
@@ -322,48 +386,36 @@ detect_docker() {
 
     local docker_path
     if docker_path=$(resolve_cmd docker); then
-        version=$("$docker_path" --version 2>/dev/null | head -1 | sed 's/Docker version //' | cut -d, -f1 || echo "N/A")
+        local ver
+        ver=$("$docker_path" version --format '{{.Client.Version}}' 2>/dev/null || true)
+        version="Docker ${ver:-?}"
         status="installed"
-        config="install-only"
 
-        # Check if daemon is running
-        local daemon_running=0
-        if docker info &>/dev/null 2>&1; then
-            daemon_running=1
-        fi
-
-        # Check if user is in docker group or Docker Desktop is running
-        local in_group=0
-        if is_macos; then
-            # On macOS, check if Docker Desktop is running
-            if pgrep -f "Docker Desktop" &>/dev/null || pgrep -f "com.docker.hyperkit" &>/dev/null; then
-                in_group=1
-            fi
-        else
-            # On Linux, check docker group membership
-            if id -nG "$USER" 2>/dev/null | grep -qw docker; then
-                in_group=1
-            fi
-        fi
-
-        # Check daemon.json exists
-        local has_config=0
-        [[ -f /etc/docker/daemon.json ]] && has_config=1
-
-        # Check compose
-        local has_compose=0
-        docker compose version &>/dev/null 2>&1 && has_compose=1
-
-        if [[ $daemon_running -eq 1 && $in_group -eq 1 ]]; then
+        if "$docker_path" info 2>/dev/null | grep -qi rootless; then
+            version="${version} (rootless)"
             config="configured"
-            [[ $has_compose -eq 1 ]] && version="${version} +compose"
-        elif [[ $in_group -eq 1 || $has_config -eq 1 ]]; then
+        elif "$docker_path" info >/dev/null 2>&1; then
+            version="${version} (rootful)"
+            config="configured"
+        else
+            # Client is here but nothing answers on the socket.
             status="partial"
-            config="install-only"
+            config="daemon-unavailable"
         fi
     fi
 
     echo "${status}|${version}|${config}"
+}
+
+# Containers is one component with two interchangeable backends, so exactly one
+# of them is reported — whichever the configuration selects. Showing both would
+# mean a permanent red mark for the one you deliberately did not install.
+detect_containers() {
+    case "$(containers_engine)" in
+        podman) detect_podman ;;
+        docker) detect_docker ;;
+        *)      echo "not_installed|N/A|not-configured" ;;
+    esac
 }
 
 detect_tailscale() {
@@ -433,199 +485,6 @@ detect_ssh() {
     echo "${status}|${version}|${config}"
 }
 
-detect_claude_code() {
-    local status="not_installed" version="N/A" config="not-configured"
-
-    # Load nvm for node-based CLIs
-    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-    # shellcheck disable=SC1091
-    [[ -f "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh" 2>/dev/null
-
-    local claude_path
-    if claude_path=$(resolve_cmd claude); then
-        version=$("$claude_path" --version 2>/dev/null | head -1 || echo "N/A")
-        status="installed"
-        config="install-only"
-
-        # Check settings
-        local has_settings=0
-        if [[ -f "$HOME/.claude/settings.json" ]]; then
-            has_settings=1
-        fi
-
-        # Check API configuration
-        local has_api=0
-        if [[ -f "$HOME/.claude/settings.json" ]]; then
-            # Check for ANTHROPIC_BASE_URL or ANTHROPIC_AUTH_TOKEN in settings
-            if grep -q "ANTHROPIC_AUTH_TOKEN\|ANTHROPIC_API_KEY" "$HOME/.claude/settings.json" 2>/dev/null; then
-                has_api=1
-            fi
-        fi
-
-        # Check onboarding
-        local has_onboarding=0
-        if [[ -f "$HOME/.claude.json" ]] && grep -q '"hasCompletedOnboarding"' "$HOME/.claude.json" 2>/dev/null; then
-            has_onboarding=1
-        fi
-
-        if [[ $has_api -eq 1 ]]; then
-            config="configured"
-        elif [[ $has_settings -eq 1 || $has_onboarding -eq 1 ]]; then
-            status="partial"
-            config="install-only"
-        fi
-    fi
-
-    echo "${status}|${version}|${config}"
-}
-
-detect_codex() {
-    local status="not_installed" version="N/A" config="not-configured"
-
-    # Load nvm for node-based CLIs
-    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-    # shellcheck disable=SC1091
-    [[ -f "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh" 2>/dev/null
-
-    local codex_path
-    if codex_path=$(resolve_cmd codex); then
-        version=$("$codex_path" --version 2>/dev/null | head -1 || echo "N/A")
-        status="installed"
-        config="install-only"
-
-        # Check config
-        local has_config=0
-        [[ -f "$HOME/.codex/config.toml" ]] && has_config=1
-
-        # Check auth
-        local has_auth=0
-        [[ -f "$HOME/.codex/auth.json" ]] && has_auth=1
-
-        if [[ $has_config -eq 1 && $has_auth -eq 1 ]]; then
-            config="configured"
-        elif [[ $has_config -eq 1 || $has_auth -eq 1 ]]; then
-            status="partial"
-            config="install-only"
-        fi
-    fi
-
-    echo "${status}|${version}|${config}"
-}
-
-detect_gemini() {
-    local status="not_installed" version="N/A" config="not-configured"
-
-    # Load nvm for node-based CLIs
-    export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-    # shellcheck disable=SC1091
-    [[ -f "$NVM_DIR/nvm.sh" ]] && . "$NVM_DIR/nvm.sh" 2>/dev/null
-
-    local gemini_path
-    if gemini_path=$(resolve_cmd gemini); then
-        version=$("$gemini_path" --version 2>/dev/null | head -1 || echo "N/A")
-        status="installed"
-        config="install-only"
-
-        # Check .env config
-        local has_env=0
-        [[ -f "$HOME/.gemini/.env" ]] && has_env=1
-
-        # Check for API key in .env
-        local has_api=0
-        if [[ $has_env -eq 1 ]] && grep -q "GEMINI_API_KEY=" "$HOME/.gemini/.env" 2>/dev/null; then
-            local key_val
-            key_val=$(grep "GEMINI_API_KEY=" "$HOME/.gemini/.env" | cut -d= -f2-)
-            [[ -n "$key_val" ]] && has_api=1
-        fi
-
-        if [[ $has_api -eq 1 ]]; then
-            config="configured"
-        elif [[ $has_env -eq 1 ]]; then
-            status="partial"
-            config="install-only"
-        fi
-    fi
-
-    echo "${status}|${version}|${config}"
-}
-
-detect_skills() {
-    local status="not_installed" version="N/A" config="not-configured"
-
-    # Check if skills are installed by looking for known skill directories.
-    # NOTE: We intentionally use filesystem-only detection here instead of
-    # `npx skills list -g` because npx can download and execute npm packages
-    # from the network. Status checks must be read-only with no network calls.
-    local skill_dirs=(
-        "$HOME/.claude/agent-skills"
-        "$HOME/.claude/skills"
-    )
-    local found_dir=""
-    for d in "${skill_dirs[@]}"; do
-        if [[ -d "$d" ]]; then
-            found_dir="$d"
-            break
-        fi
-    done
-
-    # Count known skill subdirectories via filesystem inspection.
-    # Skills are installed globally and may reside under the npm global prefix
-    # or in the agent-skills/skills directories.
-    local skill_count=0
-    local known_skills=(find-skills pdf gemini-cli context7 writing-plans executing-plans codex)
-
-    # Check skill directories for known skill names
-    for d in "${skill_dirs[@]}"; do
-        [[ -d "$d" ]] || continue
-        for skill_name in "${known_skills[@]}"; do
-            [[ -d "$d/$skill_name" ]] && skill_count=$((skill_count + 1))
-        done
-    done
-
-    # Also check npm global lib for the skills CLI package itself
-    if [[ $skill_count -eq 0 ]]; then
-        local npm_prefix=""
-        # Check common global npm module locations without network calls
-        local global_dirs=(
-            "$HOME/.npm-global/lib/node_modules/@anthropic/agent-skills"
-            "$HOME/.npm-global/lib/node_modules/agent-skills"
-        )
-        # Try npm prefix if npm is available (local operation, no network)
-        local npm_path
-        if npm_path=$(resolve_cmd npm); then
-            npm_prefix=$("$npm_path" config get prefix 2>/dev/null || true)
-            if [[ -n "$npm_prefix" ]]; then
-                global_dirs+=(
-                    "$npm_prefix/lib/node_modules/@anthropic/agent-skills"
-                    "$npm_prefix/lib/node_modules/agent-skills"
-                )
-            fi
-        fi
-        for gd in "${global_dirs[@]}"; do
-            if [[ -d "$gd" ]]; then
-                # Package exists globally; count skills inside if possible
-                for skill_name in "${known_skills[@]}"; do
-                    [[ -d "$gd/$skill_name" ]] && skill_count=$((skill_count + 1))
-                done
-                [[ -z "$found_dir" ]] && found_dir="$gd"
-                break
-            fi
-        done
-    fi
-
-    if [[ $skill_count -gt 0 ]]; then
-        status="installed"
-        config="configured"
-        version="${skill_count} skill(s)"
-    elif [[ -n "$found_dir" ]]; then
-        status="partial"
-        config="install-only"
-        version="dir exists"
-    fi
-
-    echo "${status}|${version}|${config}"
-}
-
 detect_essential_tools() {
     # This is a meta-check for the overall Essential Tools component from setup-tools.sh
     # It checks whether the full set is properly installed with symlinks
@@ -681,43 +540,81 @@ detect_essential_tools() {
     echo "${status}|${version}|${config}"
 }
 
+detect_security() {
+    local status="not_installed"
+    local version="N/A"
+    local config="not-configured"
+
+    local fw_backend fw_active=0
+    fw_backend="$(firewall_detect_backend auto)"
+    if [[ "$fw_backend" != "none" ]] && firewall_is_active "$fw_backend"; then
+        fw_active=1
+    fi
+
+    local root_login pw_auth
+    root_login="$(security_get_sshd_param PermitRootLogin "unknown")"
+    pw_auth="$(security_get_sshd_param PasswordAuthentication "unknown")"
+
+    if [[ $fw_active -eq 1 && "$root_login" == "no" && "$pw_auth" == "no" ]]; then
+        status="installed"
+        config="configured"
+        version="${fw_backend} + key-only"
+    elif [[ $fw_active -eq 1 || "$root_login" == "no" || "$pw_auth" == "no" ]]; then
+        status="partial"
+        config="install-only"
+        version="${fw_backend:-audit}"
+    fi
+
+    echo "${status}|${version}|${config}"
+}
+
+detect_neovim() {
+    local status="not_installed" version="N/A" config="not-configured"
+
+    local nvim_path
+    if nvim_path=$(resolve_cmd nvim); then
+        status="installed"
+        version=$("$nvim_path" --version 2>/dev/null | head -1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "installed")
+        if [[ -f "$HOME/.config/nvim/init.lua" ]]; then
+            config="configured"
+        else
+            config="install-only"
+            status="partial"
+        fi
+    fi
+
+    echo "${status}|${version}|${config}"
+}
+
 # --- Output Formatters -------------------------------------------------------
 
 # Component registry (parallel to install.sh)
-COMP_IDS=(shell tmux git tools essential-tools node uv go docker tailscale ssh claude-code codex gemini skills)
+COMP_IDS=(shell tmux git tools neovim node uv containers tailscale ssh security)
 COMP_NAMES=(
     "Shell Environment"
     "Tmux"
     "Git"
     "Essential Tools"
-    "Essential Tools Setup"
+    "Neovim"
     "Node.js (nvm)"
     "uv + Python"
-    "Go (goenv)"
-    "Docker"
+    "Containers"
     "Tailscale"
     "SSH"
-    "Claude Code"
-    "Codex CLI"
-    "Gemini CLI"
-    "Agent Skills"
+    "Security Baseline"
 )
 COMP_DETECT=(
     detect_shell
     detect_tmux
     detect_git
     detect_tools
-    detect_essential_tools
+    detect_neovim
     detect_node
     detect_uv
-    detect_go
-    detect_docker
+    detect_containers
     detect_tailscale
     detect_ssh
-    detect_claude_code
-    detect_codex
-    detect_gemini
-    detect_skills
+    detect_security
 )
 
 # Run all detections and store results
@@ -741,8 +638,8 @@ print_table() {
     printf "\n"
 
     # Header
-    printf "  ${DIM}%-4s %-24s %-18s %-16s${NC}\n" "" "Component" "Version" "Config"
-    printf "  ${DIM}──── ──────────────────────── ────────────────── ────────────────${NC}\n"
+    printf "  ${DIM}%-4s %-24s %-24s %-16s${NC}\\n" "" "Component" "Version" "Config"
+    printf "  ${DIM}──── ──────────────────────── ──────────────────────── ────────────────${NC}\\n"
 
     for i in $(seq 0 $((total - 1))); do
         local result="${RESULTS[$i]}"
@@ -760,7 +657,7 @@ print_table() {
 
         # Pad plain text first, then wrap with colors (ANSI escapes break printf width)
         local ver_padded config_padded
-        printf -v ver_padded "%-18s" "$comp_version"
+        printf -v ver_padded "%-24s" "$comp_version"
         printf -v config_padded "%-16s" "$comp_config"
 
         # Apply color to the padded strings
@@ -852,15 +749,108 @@ print_short() {
     printf "\n"
 }
 
+print_security_report() {
+    setup_colors
+    local fw_backend fw_active=0
+    fw_backend="$(firewall_detect_backend auto)"
+    if [[ "$fw_backend" != "none" ]] && firewall_is_active "$fw_backend"; then
+        fw_active=1
+    fi
+
+    local root_login pw_auth pubkey_auth
+    root_login="$(security_get_sshd_param PermitRootLogin "unknown")"
+    pw_auth="$(security_get_sshd_param PasswordAuthentication "unknown")"
+    pubkey_auth="$(security_get_sshd_param PubkeyAuthentication "unknown")"
+
+    local admin_user
+    admin_user="$(rig_config_get RIG_ADMIN_USER "${SUDO_USER:-$(whoami)}")"
+
+    printf "\n  ${BOLD}${WHITE}Security Baseline${NC}\n"
+    printf "  ${DIM}────────────────────────────────────────────────────────────${NC}\n"
+
+    # Admin user
+    if security_verify_admin_user "$admin_user"; then
+        printf "  ${GREEN}✔${NC} %-22s %s\n" "Admin user" "$admin_user (sudo active)"
+    else
+        printf "  ${YELLOW}⚠${NC} %-22s %s\n" "Admin user" "$admin_user (unverified or lacks key)"
+    fi
+
+    # SSH root login
+    if [[ "$root_login" == "no" ]]; then
+        printf "  ${GREEN}✔${NC} %-22s %s\n" "SSH root login" "disabled (PermitRootLogin no)"
+    else
+        printf "  ${YELLOW}⚠${NC} %-22s %s\n" "SSH root login" "enabled ($root_login)"
+    fi
+
+    # SSH password auth
+    if [[ "$pw_auth" == "no" ]]; then
+        printf "  ${GREEN}✔${NC} %-22s %s\n" "SSH password auth" "disabled"
+    else
+        printf "  ${YELLOW}⚠${NC} %-22s %s\n" "SSH password auth" "enabled ($pw_auth)"
+    fi
+
+    # SSH public key
+    if [[ "$pubkey_auth" == "yes" || "$pubkey_auth" == "unknown" ]]; then
+        printf "  ${GREEN}✔${NC} %-22s %s\n" "SSH public key" "enabled"
+    else
+        printf "  ${RED}✘${NC} %-22s %s\n" "SSH public key" "disabled"
+    fi
+
+    # Firewall
+    if [[ $fw_active -eq 1 ]]; then
+        printf "  ${GREEN}✔${NC} %-22s %s\n" "Firewall" "$fw_backend (active)"
+        printf "  ${GREEN}✔${NC} %-22s %s\n" "Allowed rules" "$(firewall_list_allowed "$fw_backend")"
+    else
+        printf "  ${RED}✘${NC} %-22s %s\n" "Firewall" "inactive / not running"
+    fi
+
+    # Tailscale
+    if command -v tailscale >/dev/null 2>&1; then
+        local ts_ip
+        ts_ip="$(tailscale ip -4 2>/dev/null || echo "inactive")"
+        if [[ "$ts_ip" != "inactive" ]]; then
+            printf "  ${GREEN}✔${NC} %-22s %s\n" "Tailscale" "active ($ts_ip)"
+        else
+            printf "  ${DIM}○${NC} %-22s %s\n" "Tailscale" "installed (not connected)"
+        fi
+    fi
+
+    printf "\n  ${BOLD}${WHITE}Listening Ports Audit${NC}\n"
+    printf "  ${DIM}────────────────────────────────────────────────────────────${NC}\n"
+    local tcp_allow udp_allow warn_undeclared ssh_access ssh_port
+    ssh_port="$(rig_config_get RIG_SSH_PORT "22")"
+    tcp_allow="$(rig_config_get RIG_PUBLIC_TCP "$ssh_port")"
+    udp_allow="$(rig_config_get RIG_PUBLIC_UDP "")"
+    warn_undeclared="$(rig_config_get RIG_WARN_UNDECLARED_PORTS "yes")"
+    ssh_access="$(rig_config_get RIG_SSH_ACCESS "public")"
+    security_audit_listening_ports "$tcp_allow" "$udp_allow" "$warn_undeclared" "$ssh_access" "$ssh_port"
+    printf "\n"
+}
+
 # --- Main --------------------------------------------------------------------
 
 main() {
-    run_detections
-
     case "$OUTPUT_FORMAT" in
-        json)  print_json ;;
-        short) print_short ;;
-        table) print_table ;;
+        security)
+            print_security_report
+            ;;
+        doctor)
+            run_detections
+            print_table
+            print_security_report
+            ;;
+        json)
+            run_detections
+            print_json
+            ;;
+        short)
+            run_detections
+            print_short
+            ;;
+        table)
+            run_detections
+            print_table
+            ;;
     esac
 }
 

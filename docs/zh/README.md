@@ -10,26 +10,21 @@
 
 | 组件 | Debian/Ubuntu | CentOS/RHEL | Fedora | Arch Linux | macOS |
 |------|---------------|-------------|--------|------------|-------|
-| Shell (zsh, Oh My Zsh, Starship) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Tmux | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Shell (zsh, Starship, 插件) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Tmux（环境感知剪贴板） | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Git | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 基础工具 | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Clash 代理 | ✓ | ✓ | ✓ | ✓ | ✗ (仅限 Linux) |
-| Docker | ✓ (Engine) | ✓ (Engine) | ✓ (Engine) | ✓ (Engine) | ✓ (Desktop) |
+| Neovim（现代单文件配置） | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Containers（Podman / Docker） | ✓ | ✓ | ✓ | ✓ | ✓（Podman VM 或 Docker Desktop） |
 | Tailscale | ✓ | ✓ | ✓ | ✓ | ✓ |
-| SSH | ✓ | ✓ | ✓ | ✓ | ✓ (Remote Login) |
+| SSH（OpenSSH 服务与客户端） | ✓ | ✓ | ✓ | ✓ | ✓ (Remote Login) |
+| Security（防失联与防火墙基线） | ✓ | ✓ | ✓ | ✓ | —（仅 Linux 支持 ufw/firewalld） |
 | Node.js (nvm) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | uv + Python | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Go (goenv) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Claude Code | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Codex CLI | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Gemini CLI | ✓ | ✓ | ✓ | ✓ | ✓ |
-| 代理技能 | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 **注意事项：**
-- macOS 上的 Docker 使用 Docker Desktop（通过 Homebrew 安装）而非 Docker Engine
+- Containers 在 Fedora/Arch 上默认 Podman，在 Debian/RHEL 上默认 Docker；见 [setup-containers.md](setup-containers.md)
 - macOS 上的 SSH 配置 Remote Login 而非通过 systemd 配置 OpenSSH 服务器
-- Clash 代理仅支持 Linux 系统
 
 ## 脚本列表
 
@@ -38,13 +33,15 @@
 | 脚本 | 说明 |
 |------|------|
 | [install.sh](install.md) | 一站式交互/非交互安装器 |
-| [setup-shell.sh](setup-shell.md) | zsh + Oh My Zsh + 插件 + Starship |
-| [setup-tmux.sh](setup-tmux.md) | tmux + TPM + Catppuccin + 鼠标增强 |
+| [setup-shell.sh](setup-shell.md) | zsh + Starship + 插件（无框架） |
+| [setup-tmux.sh](setup-tmux.md) | tmux + 鼠标 + 回滚缓冲（带 Diff 对比与交互决策） |
 | [setup-git.sh](setup-git.md) | Git 用户身份 + 合理默认值 |
-| [setup-clash.sh](setup-clash.md) | Clash 代理 + 订阅管理 |
-| [setup-docker.sh](setup-docker.md) | Docker Engine + Compose + 守护进程配置 |
+| [setup-tools.sh](setup-tools.md) | 常用 CLI 基础工具链（rg, jq, fd, bat, gh 等） |
+| [setup-neovim.sh](../../setup-neovim.sh) | Neovim >= 0.9 现代配置与默认编辑器 |
+| [setup-containers.sh](setup-containers.md) | Podman 或 Docker 后端，默认 rootless |
 | [setup-tailscale.sh](setup-tailscale.md) | Tailscale VPN 组网 |
-| [setup-ssh.sh](setup-ssh.md) | SSH 端口 + 密钥登录 |
+| [setup-ssh.sh](setup-ssh.md) | OpenSSH 服务安装、端口与公私钥导入 |
+| [setup-security.sh](../../setup-security.sh) | 安全加固核心（防 Lockout、防火墙、端口双层审计） |
 
 ### 语言环境
 
@@ -52,16 +49,6 @@
 |------|------|
 | [setup-node.sh](setup-node.md) | nvm + Node.js |
 | [setup-uv.sh](setup-uv.md) | uv 包管理器 + Python |
-| [setup-go.sh](setup-go.md) | goenv + Go |
-
-### AI 编码代理
-
-| 脚本 | 说明 |
-|------|------|
-| [setup-claude-code.sh](setup-claude-code.md) | Claude Code CLI + API 配置 |
-| [setup-codex.sh](setup-codex.md) | OpenAI Codex CLI + API 配置 |
-| [setup-gemini.sh](setup-gemini.md) | Google Gemini CLI + API 配置 |
-| [setup-skills.sh](setup-skills.md) | 所有编码代理的通用技能 |
 
 ### 管理工具
 

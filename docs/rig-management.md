@@ -15,8 +15,11 @@ Beyond `install.sh` and `update.sh`, rig provides a CLI wrapper (`rig`) and seve
 | Command | Script | Description |
 |---------|--------|-------------|
 | `rig install` | `install.sh` | Install components (now with `--preset` support) |
+| `rig apply --profile NAME` | `install.sh --preset NAME` | Apply a named host profile (`--dry-run` previews it) |
 | `rig update` | `update.sh` | Update installed components |
 | `rig status` | `status.sh` | Show installed components, versions, config status |
+| `rig security` | `setup-security.sh` | Security hardening & port audit (`rig security status` for report) |
+| `rig doctor` | `status.sh --doctor` | Full health, component, and security diagnostic report |
 | `rig export` | `export-config.sh` | Export configuration to JSON + secrets file |
 | `rig import` | `import-config.sh` | Import configuration from exported files |
 | `rig uninstall` | `uninstall.sh` | Safely remove components |
@@ -34,9 +37,10 @@ Presets are predefined component bundles for common use cases. Instead of select
 | Preset | Components | Use Case |
 |--------|------------|----------|
 | `minimal` | shell, tools, git | Lightweight base environment |
-| `agent` | shell, tools, git, node, claude-code, codex, gemini, skills | AI coding agent development |
-| `devops` | shell, tools, git, node, go, docker, tailscale, ssh | Server and infrastructure work |
-| `fullstack` | shell, tmux, git, tools, node, uv, go, docker, ssh, claude-code, codex, gemini, skills | Everything for full-stack development |
+| `agent` | shell, tools, git, node | Shell + tooling + Node.js runtime |
+| `devops` | shell, tools, git, node, containers, tailscale, ssh | Server and infrastructure work |
+| `vps` | shell, git, tools, neovim, containers, tailscale, ssh, security | Production VPS server baseline with hardening |
+| `fullstack` | shell, tmux, git, tools, node, uv, containers, ssh | Everything for full-stack development |
 
 ### Usage
 
@@ -45,7 +49,7 @@ Presets are predefined component bundles for common use cases. Instead of select
 rig install --preset agent
 
 # Install with a preset (non-interactive via curl)
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/install.sh | bash -s -- --preset minimal
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh | bash -s -- --preset minimal
 
 # With proxy
 rig install --preset devops --gh-proxy https://gh-proxy.org
@@ -53,7 +57,7 @@ rig install --preset devops --gh-proxy https://gh-proxy.org
 
 Presets set the initial component selection. The interactive TUI still appears, so you can add or remove components before confirming. In non-interactive mode (`curl | bash`), the preset selection is used as-is.
 
-Dependencies are resolved automatically — for example, `--preset agent` includes `node` because `claude-code`, `codex`, and `gemini` depend on it.
+Dependencies declared in the registry are resolved automatically. No component currently declares one.
 
 ## CLI Commands
 
@@ -77,7 +81,7 @@ Update installed components. See [setup-update.md](setup-update.md) for details.
 ```bash
 rig update                           # Interactive — select from installed
 rig update --all                     # Update all installed components
-rig update --components codex,node   # Update specific components
+rig update --components containers,node  # Update specific components
 ```
 
 ### rig status
@@ -93,14 +97,11 @@ Output example:
 ```
 Component               Status    Version              Config
 ─────────────────────────────────────────────────────────────────
-Shell Environment       ✔         zsh 5.9 / omz d07...  configured
+Shell Environment       ✔         zsh 5.9               configured
 Tmux                    ✘         —                      —
 Git                     ✔         2.43.0                 configured
 Essential Tools         ✔         rg 14.1 / jq 1.7      configured
 Node.js (nvm)           ✔         v24.1.0                configured
-Claude Code             ✔         1.0.12                 configured
-Codex CLI               ◐         0.1.5                  install-only
-Gemini CLI              ✘         —                      —
 ```
 
 Status symbols:
@@ -141,8 +142,8 @@ Reads the JSON config, sources the companion `secrets.env` if present, shows an 
 Remove a component with dependency checking and config backup.
 
 ```bash
-rig uninstall docker             # Remove Docker (with safety checks)
-rig uninstall docker --force     # Skip dependency checks
+rig uninstall containers         # Remove the container backend (safety checks)
+rig uninstall containers --force # Skip dependency checks
 ```
 
 See [Uninstall Safety](#uninstall-safety) for details.
@@ -174,15 +175,13 @@ Export and import allow you to capture a rig configuration and reproduce it on a
 - List of installed components
 - Git user name and email
 - Node.js version
-- Docker mirror configuration
+- Container engine and registry mirrors
 - Go version
 - Component-specific settings
 
 **Sensitive data** (`secrets.env`):
 
-- `CLAUDE_API_URL` and `CLAUDE_API_KEY`
-- `CODEX_API_URL` and `CODEX_API_KEY`
-- `GEMINI_API_URL` and `GEMINI_API_KEY`
+- `TAILSCALE_AUTH_KEY`
 
 ### JSON Format
 
@@ -192,12 +191,12 @@ The `rig-config.json` file contains a structured representation of the rig state
 {
   "version": "1",
   "exported_at": "2025-05-14T12:00:00Z",
-  "components": ["shell", "tools", "git", "node", "claude-code", "codex"],
+  "components": ["shell", "tools", "git", "node", "containers"],
   "config": {
     "git_user": "Your Name",
     "git_email": "you@example.com",
     "node_version": "24",
-    "docker_mirror": ""
+    "containers_engine": "podman"
   }
 }
 ```
@@ -207,12 +206,7 @@ The `rig-config.json` file contains a structured representation of the rig state
 The `secrets.env` file uses standard shell variable syntax:
 
 ```bash
-CLAUDE_API_URL=https://api.anthropic.com
-CLAUDE_API_KEY=sk-ant-...
-CODEX_API_URL=https://api.openai.com
-CODEX_API_KEY=sk-...
-GEMINI_API_URL=https://generativelanguage.googleapis.com
-GEMINI_API_KEY=AI...
+TAILSCALE_AUTH_KEY=tskey-auth-xxxxx
 ```
 
 ### Security Considerations
@@ -254,31 +248,29 @@ The uninstall system prevents accidental breakage through dependency checking, c
 Before removing a component, `uninstall.sh` checks if other installed components depend on it:
 
 ```bash
-$ rig uninstall node
-Error: Cannot uninstall Node.js — the following components depend on it:
-  - Claude Code
-  - Codex CLI
-  - Gemini CLI
-  - Agent Skills
+$ rig uninstall docker
+Error: Cannot uninstall Docker — the following components depend on it:
+  - some-future-component
 
 Use --force to override dependency checks.
 ```
 
+No component currently declares a dependent, so this check passes for every
+component today. The mechanism is driven by the `COMP_DEPENDENTS` array in
+`uninstall.sh`.
+
 ### Config Backups
 
-Configuration files are backed up before removal with a `.rig-backup` suffix:
+Rig-created backups are centralized under `~/.local/share/rig/backups/` instead of being scattered beside live files in the home directory or `/etc`:
 
-| Component | Files Backed Up |
+| Component | Backup Source |
 |-----------|----------------|
-| Shell | `~/.zshrc`, `~/.config/starship.toml` |
+| Shell | Nothing — it never writes your `~/.zshrc` or `starship.toml` |
 | Tmux | `~/.tmux.conf` |
 | Git | `~/.gitconfig` |
 | SSH | `/etc/ssh/sshd_config` |
-| Claude Code | `~/.claude/` |
-| Codex CLI | `~/.codexrc` |
-| Gemini CLI | `~/.geminirc` |
 
-Backup files are preserved after uninstall — they are not cleaned up automatically.
+User configuration goes to `backups/user/`; privileged configuration goes to `backups/system/`, with ownership returned to the current user. Backups remain after uninstall and are never automatically deleted. Legacy `.bak.*` / `.rig-backup` files are still recognized for restore compatibility.
 
 ### Data Preservation Prompts
 
@@ -310,7 +302,7 @@ Set up a machine for AI coding agent work:
 
 ```bash
 # Install the rig CLI
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/install.sh | bash -s -- --preset agent
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh | bash -s -- --preset agent
 
 # Verify what was installed
 rig status
@@ -324,8 +316,8 @@ Start with `minimal` and add components:
 # Start with minimal base
 rig install --preset minimal
 
-# Later, add Docker and Go
-rig install --components docker,go
+# Later, add containers and uv
+rig install --components containers,uv
 ```
 
 Components already installed are skipped — `install.sh` is idempotent.
@@ -351,7 +343,7 @@ rig import rig-config.json
 rig status
 
 # Remove a component (with safety checks)
-rig uninstall docker
+rig uninstall containers
 
 # Force-remove if needed
 rig uninstall node --force

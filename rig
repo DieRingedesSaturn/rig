@@ -3,10 +3,11 @@ set -euo pipefail
 
 # =============================================================================
 # Rig CLI
-# https://github.com/X-Zero-L/rig
+# https://github.com/DieRingedesSaturn/rig
 #
 # Usage:
 #   rig install                    # Interactive install
+#   rig apply --profile vps        # Apply a named host profile
 #   rig install --all              # Install everything
 #   rig update                     # Interactive update
 #   rig update --all               # Update all installed
@@ -22,11 +23,12 @@ set -euo pipefail
 # =============================================================================
 
 VERSION="0.1.0"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Prevent gh-proxy.org from rewriting these URLs in proxied content
 _GH="github.com"
 _RAW="raw.githubusercontent.com"
-REPO="X-Zero-L/rig"
+REPO="DieRingedesSaturn/rig"
 BRANCH="master"
 BASE_URL="https://${_RAW}/${REPO}/${BRANCH}"
 
@@ -87,6 +89,13 @@ download_and_run() {
     local script="$1"
     shift
 
+    # If running from a local checkout, prefer local files directly
+    local local_script="$SCRIPT_DIR/$script"
+    if [[ -f "$local_script" && -f "$SCRIPT_DIR/lib/os-detect.sh" ]]; then
+        bash "$local_script" "$@"
+        return $?
+    fi
+
     if ! command -v curl &>/dev/null; then
         die "curl is required but not found"
     fi
@@ -99,7 +108,7 @@ download_and_run() {
     # Download lib files first (scripts source these); fail early on error
     mkdir -p "$tmpdir/lib"
     local lib_file
-    for lib_file in os-detect.sh pkg-maps.sh pkg-manager.sh; do
+    for lib_file in os-detect.sh pkg-maps.sh pkg-manager.sh rig-config.sh containers.sh docker.sh podman.sh tools.sh firewall.sh security.sh backup.sh; do
         if ! curl -fsSL "$(build_url "lib/$lib_file")" -o "$tmpdir/lib/$lib_file" 2>/dev/null; then
             rm -rf "$tmpdir"
             die "Failed to download lib/$lib_file"
@@ -171,8 +180,11 @@ show_help() {
     printf "\n"
     printf "  ${BOLD}Commands:${NC}\n"
     printf "    ${WHITE}install${NC}     Install components (interactive TUI)\n"
+    printf "    ${WHITE}apply${NC}       Apply a named host profile\n"
     printf "    ${WHITE}update${NC}      Update installed components\n"
     printf "    ${WHITE}status${NC}      Show installed component status\n"
+    printf "    ${WHITE}security${NC}    Manage security baseline, firewall & port audit\n"
+    printf "    ${WHITE}doctor${NC}      Comprehensive health & security baseline audit\n"
     printf "    ${WHITE}export${NC}      Export current configuration\n"
     printf "    ${WHITE}import${NC}      Import configuration from file\n"
     printf "    ${WHITE}uninstall${NC}   Uninstall components\n"
@@ -183,6 +195,7 @@ show_help() {
     printf "  ${BOLD}Options:${NC}\n"
     printf "    --gh-proxy URL   GitHub proxy (or set ${CYAN}GH_PROXY${NC} env var)\n"
     printf "                     ${DIM}Must use https://. HTTP proxies are rejected.${NC}\n"
+    printf "    --dry-run        Resolve an install/apply plan without making changes\n"
     printf "\n"
     printf "  ${BOLD}Security:${NC}\n"
     printf "    ${DIM}Commands download and execute scripts from GitHub via curl | bash.${NC}\n"
@@ -192,10 +205,15 @@ show_help() {
     printf "\n"
     printf "  ${BOLD}Examples:${NC}\n"
     printf "    rig install                          ${DIM}# Interactive TUI${NC}\n"
+    printf "    rig apply --profile vps              ${DIM}# Apply VPS server baseline${NC}\n"
+    printf "    rig apply --profile vps --dry-run    ${DIM}# Preview without changes${NC}\n"
     printf "    rig install --all                    ${DIM}# Install everything${NC}\n"
-    printf "    rig install --components shell,node   ${DIM}# Specific components${NC}\n"
+    printf "    rig install --preset vps             ${DIM}# Install VPS server baseline${NC}\n"
     printf "    rig update --all                     ${DIM}# Update all installed${NC}\n"
     printf "    rig status                           ${DIM}# Check what's installed${NC}\n"
+    printf "    rig security status                  ${DIM}# Audit ports & security baseline${NC}\n"
+    printf "    rig security                         ${DIM}# Run security hardening${NC}\n"
+    printf "    rig doctor                           ${DIM}# Run system health check${NC}\n"
     printf "    rig export > my-config.json          ${DIM}# Save configuration${NC}\n"
     printf "    rig import my-config.json            ${DIM}# Restore configuration${NC}\n"
     printf "\n"
@@ -237,11 +255,30 @@ main() {
         install)
             download_and_run "install.sh" "$@"
             ;;
+        apply)
+            if [[ "${1:-}" != "--profile" || -z "${2:-}" ]]; then
+                die "Usage: rig apply --profile <minimal|agent|devops|vps|fullstack>"
+            fi
+            local profile="$2"
+            shift 2
+            download_and_run "install.sh" --preset "$profile" "$@"
+            ;;
         update)
             download_and_run "update.sh" "$@"
             ;;
         status)
             download_and_run "status.sh" "$@"
+            ;;
+        security)
+            if [[ "${1:-}" == "status" ]]; then
+                shift
+                download_and_run "status.sh" "--security" "$@"
+            else
+                download_and_run "setup-security.sh" "$@"
+            fi
+            ;;
+        doctor)
+            download_and_run "status.sh" "--doctor" "$@"
             ;;
         export)
             download_and_run "export-config.sh" "$@"

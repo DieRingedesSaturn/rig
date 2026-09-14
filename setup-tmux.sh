@@ -1,7 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Source library dependencies
+# =============================================================================
+# Tmux Setup (lightweight)
+# https://github.com/DieRingedesSaturn/rig
+#
+# Installs tmux and, only when no configuration exists yet, writes a minimal
+# tmux.conf: extended keys, mouse support, a large scrollback, and a clipboard
+# binding that is correct for the machine it runs on.
+#
+# Deliberately NOT a tmux framework installer: no TPM, no Catppuccin, no
+# plugin git clones. The config is a handful of lines you can read in one go.
+#
+# Configuration contract:
+#
+#   ~/.tmux.conf                  read-only by default (offers diff & interactive options)
+#   ~/.config/tmux/tmux.conf      read-only by default (offers diff & interactive options)
+#   anything else                 untouched
+#
+# Existing configurations are never overwritten without explicit interactive confirmation
+# and automatic timestamped backup.
+# =============================================================================
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/os-detect.sh
 source "$SCRIPT_DIR/lib/os-detect.sh"
@@ -9,242 +29,241 @@ source "$SCRIPT_DIR/lib/os-detect.sh"
 source "$SCRIPT_DIR/lib/pkg-maps.sh"
 # shellcheck source=lib/pkg-manager.sh
 source "$SCRIPT_DIR/lib/pkg-manager.sh"
+# shellcheck source=lib/backup.sh
+source "$SCRIPT_DIR/lib/backup.sh"
 
-# Usage:
-#   ./setup-tmux.sh                    # default (no custom keybindings)
-#   TMUX_KEYBINDS=1 ./setup-tmux.sh    # enable custom keybindings
-#   ./setup-tmux.sh --keybinds         # same as above
-#
-# Environment variables:
-#   TMUX_KEYBINDS    - Enable custom keybindings (default: 0)
-#                      Adds: Ctrl+a prefix, | and - splits, vim-style resize
-#   TMUX_MOUSE       - Enable mouse support (default: 1)
-#   TMUX_STATUS_POS  - Status bar position: top/bottom (default: top)
-#   GH_PROXY         - GitHub proxy URL for git clone
-
-# Parse arguments
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --keybinds)    TMUX_KEYBINDS=1; shift ;;
-        --no-mouse)    TMUX_MOUSE=0; shift ;;
-        --status-pos)  TMUX_STATUS_POS="$2"; shift 2 ;;
-        *) shift ;;
-    esac
-done
-
-TMUX_KEYBINDS="${TMUX_KEYBINDS:-0}"
 TMUX_MOUSE="${TMUX_MOUSE:-1}"
-TMUX_STATUS_POS="${TMUX_STATUS_POS:-top}"
-GH_PROXY="${GH_PROXY:-}"
-_GH="github.com"
+TMUX_HISTORY_LIMIT="${TMUX_HISTORY_LIMIT:-100000}"
 
-# Ensure dependencies
-if ! command -v git &>/dev/null; then
-    pkg_install git
-fi
+TMUX_CONF="$HOME/.tmux.conf"
+TMUX_CONF_XDG="${XDG_CONFIG_HOME:-$HOME/.config}/tmux/tmux.conf"
+MISSING_CONF=()
 
-echo "=== Tmux Setup ==="
+echo "=== Tmux Setup (lightweight) ==="
+echo "  platform: $OS_DISTRO ($OS_FAMILY, $PKG_MANAGER)"
+echo ""
 
-# [1/4] Install tmux
-echo "[1/4] Installing tmux..."
-if command -v tmux &>/dev/null; then
-    echo "  Already installed, skipping."
+# --- [1/3] Package -----------------------------------------------------------
+
+echo "[1/3] Installing tmux..."
+if command -v tmux >/dev/null 2>&1; then
+    echo "  already installed: $(command -v tmux) ($(tmux -V 2>/dev/null))"
 else
     pkg_install tmux
+    if ! command -v tmux >/dev/null 2>&1; then
+        echo "Error: tmux is still not available after installation." >&2
+        exit 1
+    fi
+    echo "  installed: $(command -v tmux) ($(tmux -V 2>/dev/null))"
 fi
 
-# [2/4] Install TPM
-echo "[2/4] Installing TPM..."
-TPM_DIR="$HOME/.tmux/plugins/tpm"
-if [ -d "$TPM_DIR" ]; then
-    echo "  Already installed, skipping."
-else
-    CLONE_URL="https://${_GH}/tmux-plugins/tpm"
-    [ -n "$GH_PROXY" ] && CLONE_URL="${GH_PROXY%/}/https://${_GH}/tmux-plugins/tpm"
-    git clone --depth 1 "$CLONE_URL" "$TPM_DIR"
-fi
+# --- [2/3] Locate an existing configuration ---------------------------------
 
-# [3/4] Write config
-echo "[3/4] Writing config..."
-TMUX_CONF="$HOME/.tmux.conf"
-
-generate_config() {
-    echo '# ─── General ───'
-    echo 'set -g default-terminal "tmux-256color"'
-    echo 'set -ag terminal-overrides ",xterm-256color:RGB"'
-    echo 'set -g base-index 1'
-    echo 'setw -g pane-base-index 1'
-    echo 'set -g renumber-windows on'
-    echo 'set -g set-clipboard on'
-    echo 'set -g detach-on-destroy off'
-
-    if [ "$TMUX_MOUSE" -eq 1 ]; then
-        echo ''
-        echo '# ─── Mouse ───'
-        echo 'set -g mouse on'
-    fi
-
-    echo ''
-    echo '# ─── Status bar ───'
-    echo "set -g status-position ${TMUX_STATUS_POS}"
-
-    echo ''
-    echo '# ─── Mouse enhancements ───'
-    echo '# Click session name → session/window tree picker'
-    echo 'bind -n MouseDown1StatusLeft choose-tree -Zs'
-    echo '# Scroll wheel on status bar → cycle windows'
-    echo 'bind -n WheelUpStatus previous-window'
-    echo 'bind -n WheelDownStatus next-window'
-    echo '# Double-click on pane → toggle zoom'
-    echo 'bind -n DoubleClick1Pane resize-pane -Z'
-    echo '# Middle-click on pane → paste buffer'
-    echo 'bind -n MouseDown2Pane select-pane -t= \; paste-buffer'
-
-    # Right-click context menus (heredoc for complex quoting)
-cat << 'MOUSECONF'
-
-# ─── Right-click context menus ───
-# Right-click on pane
-bind -n MouseDown3Pane display-menu -T "#[align=centre]Pane" -t = -x M -y M \
-  "Horizontal Split" h "split-window -h -c '#{pane_current_path}'" \
-  "Vertical Split" v "split-window -v -c '#{pane_current_path}'" \
-  "" \
-  "#{?window_zoomed_flag,Unzoom,Zoom}" z "resize-pane -Z" \
-  "" \
-  "Swap Up" u "swap-pane -U" \
-  "Swap Down" d "swap-pane -D" \
-  "" \
-  "Kill" x "confirm-before -p 'kill pane? (y/n)' kill-pane"
-
-# Right-click on window in status bar
-bind -n MouseDown3Status display-menu -T "#[align=centre]#W" -t = -x W -y S \
-  "Rename" r "command-prompt -I '#W' 'rename-window -- \"%%\"'" \
-  "New Window" n "new-window -a -c '#{pane_current_path}'" \
-  "" \
-  "Kill" x "confirm-before -p 'kill #W? (y/n)' kill-window"
-
-# Right-click on session name
-bind -n MouseDown3StatusLeft display-menu -T "#[align=centre]#S" -t = -x M -y S \
-  "New Session" n "command-prompt -p 'session name:' 'new-session -s \"%%\"'" \
-  "Rename" r "command-prompt -I '#S' 'rename-session -- \"%%\"'" \
-  "" \
-  "Kill" x "confirm-before -p 'kill session #S? (y/n)' kill-session"
-MOUSECONF
-
-    echo ''
-    echo '# ─── Quick navigation (no prefix needed) ───'
-    echo '# Alt+1..9 → switch to window by number'
-    echo 'bind -n M-1 select-window -t 1'
-    echo 'bind -n M-2 select-window -t 2'
-    echo 'bind -n M-3 select-window -t 3'
-    echo 'bind -n M-4 select-window -t 4'
-    echo 'bind -n M-5 select-window -t 5'
-    echo 'bind -n M-6 select-window -t 6'
-    echo 'bind -n M-7 select-window -t 7'
-    echo 'bind -n M-8 select-window -t 8'
-    echo 'bind -n M-9 select-window -t 9'
-    echo '# Alt+n → new window'
-    echo 'bind -n M-n new-window -c "#{pane_current_path}"'
-
-    if [ "$TMUX_KEYBINDS" -eq 1 ]; then
-        echo ''
-        echo '# ─── Custom keybindings ───'
-        echo '# Prefix: Ctrl+a'
-        echo 'unbind C-b'
-        echo 'set -g prefix C-a'
-        echo 'bind C-a send-prefix'
-        echo ''
-        echo '# Intuitive splits'
-        echo 'bind | split-window -h -c "#{pane_current_path}"'
-        echo 'bind - split-window -v -c "#{pane_current_path}"'
-        echo ''
-        echo '# Vim-style pane resize'
-        echo 'bind -r H resize-pane -L 5'
-        echo 'bind -r J resize-pane -D 5'
-        echo 'bind -r K resize-pane -U 5'
-        echo 'bind -r L resize-pane -R 5'
-    fi
-
-    echo ''
-    echo '# ─── Catppuccin theme ───'
-    echo 'set -g @catppuccin_flavor "mocha"'
-    echo 'set -g @catppuccin_window_status_style "rounded"'
-
-    echo ''
-    echo '# ─── Plugins ───'
-    echo "set -g @plugin 'tmux-plugins/tpm'"
-    echo "set -g @plugin 'tmux-plugins/tmux-sensible'"
-    echo "set -g @plugin 'catppuccin/tmux'"
-    echo "set -g @plugin 'christoomey/vim-tmux-navigator'"
-    echo "set -g @plugin 'tmux-plugins/tmux-yank'"
-    echo "set -g @plugin 'tmux-plugins/tmux-resurrect'"
-    echo "set -g @plugin 'tmux-plugins/tmux-continuum'"
-
-    echo ''
-    echo '# ─── Plugin settings ───'
-    echo "set -g @continuum-restore 'on'"
-
-    echo ''
-    echo '# ─── Initialize TPM (keep at bottom) ───'
-    echo "run '~/.tmux/plugins/tpm/tpm'"
-}
-
-WANT_CONF=$(generate_config)
-if [ -f "$TMUX_CONF" ] && [ "$(cat "$TMUX_CONF")" = "$WANT_CONF" ]; then
-    echo "  Already configured, skipping."
-else
-    printf '%s\n' "$WANT_CONF" > "$TMUX_CONF"
-    echo "  Config written."
-    if [ -n "${TMUX:-}" ]; then
-        tmux source-file "$TMUX_CONF"
-        echo "  Config reloaded."
-    fi
-fi
-
-# [4/4] Install plugins
-echo "[4/4] Installing plugins..."
-PLUGIN_DIR="$HOME/.tmux/plugins"
-PLUGINS=(
-    "tmux-plugins/tmux-sensible"
-    "catppuccin/tmux"
-    "christoomey/vim-tmux-navigator"
-    "tmux-plugins/tmux-yank"
-    "tmux-plugins/tmux-resurrect"
-    "tmux-plugins/tmux-continuum"
-)
-
-ALL_PRESENT=1
-for plugin in "${PLUGINS[@]}"; do
-    plugin_name=$(basename "$plugin")
-    if [ ! -d "$PLUGIN_DIR/$plugin_name" ]; then
-        ALL_PRESENT=0
+# tmux 3.1+ prefers $XDG_CONFIG_HOME/tmux/tmux.conf and falls back to
+# ~/.tmux.conf. Either counts as "you already have a config".
+echo ""
+echo "[2/3] Locating your tmux configuration..."
+EXISTING_CONF=""
+for candidate in "$TMUX_CONF_XDG" "$TMUX_CONF"; do
+    if [[ -f "$candidate" ]]; then
+        EXISTING_CONF="$candidate"
         break
     fi
 done
 
-if [ "$ALL_PRESENT" -eq 1 ]; then
-    echo "  All plugins already installed, skipping."
+if [[ -n "$EXISTING_CONF" ]]; then
+    echo "  keeping existing $EXISTING_CONF (left untouched)"
 else
-    for plugin in "${PLUGINS[@]}"; do
-        plugin_name=$(basename "$plugin")
-        if [ -d "$PLUGIN_DIR/$plugin_name" ]; then
-            echo "  $plugin_name: already installed"
-            continue
+    echo "  no tmux configuration found"
+fi
+
+# --- [3/3] Write a starter config only when none exists ---------------------
+
+# Clipboard handling depends on the machine, so probe instead of guessing:
+#
+#   macOS            -> pbcopy
+#   Linux + Wayland  -> wl-copy      (package: wl-clipboard)
+#   Linux + X11      -> xclip        (package: xclip)
+#   headless / VPS   -> no external tool; rely on OSC 52 passthrough
+#
+# The headless case matters: a server has no display server, so a binding that
+# shells out to wl-copy or xclip would simply fail there.
+
+detect_clipboard() {
+    if is_macos; then
+        if command -v pbcopy >/dev/null 2>&1; then
+            echo "pbcopy"
         fi
-        CLONE_URL="https://${_GH}/$plugin"
-        [ -n "$GH_PROXY" ] && CLONE_URL="${GH_PROXY%/}/https://${_GH}/$plugin"
-        echo "  $plugin_name: installing..."
-        git clone --depth 1 "$CLONE_URL" "$PLUGIN_DIR/$plugin_name" 2>/dev/null
+        return 0
+    fi
+    if [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wl-copy >/dev/null 2>&1; then
+        echo "wl-copy"
+        return 0
+    fi
+    if [[ -n "${DISPLAY:-}" ]] && command -v xclip >/dev/null 2>&1; then
+        echo "xclip -selection clipboard"
+        return 0
+    fi
+    return 0
+}
+
+CLIPBOARD_CMD="$(detect_clipboard)"
+
+generate_config() {
+    echo '# Rig Tmux Baseline'
+    echo '# ─── General ───'
+    echo 'set -g extended-keys on'
+    echo 'set -g extended-keys-format csi-u'
+    if [[ "$TMUX_MOUSE" == "1" ]]; then
+        echo 'set -g mouse on'
+    fi
+    echo "set -g history-limit $TMUX_HISTORY_LIMIT"
+    echo ''
+    echo '# ─── Clipboard ───'
+    if [[ -n "$CLIPBOARD_CMD" ]]; then
+        echo "# Dragging a selection copies it via $CLIPBOARD_CMD"
+        printf 'bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel "%s"\n' "$CLIPBOARD_CMD"
+        echo 'set -g set-clipboard on'
+    else
+        echo '# No display server or clipboard helper found, so tmux talks to the'
+        echo '# terminal directly using OSC 52. Works over SSH with a terminal'
+        echo '# that supports it (kitty, Konsole, WezTerm, iTerm2, Ghostty, ...).'
+        echo 'set -g set-clipboard on'
+    fi
+}
+
+show_diff() {
+    local old_file="$1"
+    local new_file="$2"
+    echo ""
+    echo "─── Configuration Diff (- existing / + recommended) ───"
+    if command -v git >/dev/null 2>&1; then
+        git diff --no-index --color=always "$old_file" "$new_file" || true
+    elif diff --help 2>&1 | grep -q -- '--color'; then
+        diff -u --color=always "$old_file" "$new_file" || true
+    else
+        diff -u "$old_file" "$new_file" || true
+    fi
+    echo "───────────────────────────────────────────────────────"
+}
+
+echo ""
+echo "[3/3] Tmux configuration..."
+if [[ -n "$EXISTING_CONF" ]]; then
+    # Read-only check: report what the existing config is missing rather than
+    # editing it blindly.
+    rc_lines() { grep -n "$1" "$EXISTING_CONF" 2>/dev/null | grep -v ':[[:space:]]*#' || true; }
+    rc_has() { [[ -n "$(rc_lines "$1")" ]]; }
+
+    for setting in 'extended-keys' 'mouse' 'history-limit'; do
+        if rc_has "$setting"; then
+            echo "  [ok] $setting is set"
+        else
+            echo "  [--] $setting is not set"
+            MISSING_CONF+=("$setting")
+        fi
     done
+
+    if rc_has 'set-clipboard'; then
+        echo "  [ok] clipboard handling is configured"
+    elif rc_has 'copy-pipe' || rc_has 'copy-pipe-and-cancel'; then
+        echo "  [ok] clipboard handling is configured"
+    else
+        echo "  [--] no clipboard handling found"
+        MISSING_CONF+=("clipboard")
+    fi
+
+    # Advisory: external clipboard command mismatch
+    for probe in pbcopy wl-copy xclip; do
+        if rc_has "$probe" && ! command -v "$probe" >/dev/null 2>&1; then
+            echo ""
+            echo "  note: $EXISTING_CONF calls '$probe', which is not installed here."
+            if [[ "$probe" == "pbcopy" ]] && ! is_macos; then
+                echo "        pbcopy is macOS-only — that binding does nothing on $OS_DISTRO."
+            elif [[ "$probe" == "xclip" && -n "${WAYLAND_DISPLAY:-}" ]]; then
+                echo "        You are on Wayland; 'wl-copy' (wl-clipboard) is the right tool."
+            elif [[ "$probe" == "wl-copy" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+                echo "        No Wayland session detected; use xclip on X11."
+            fi
+            echo "        Or drop the binding and use: set -g set-clipboard on (OSC 52)."
+        fi
+    done
+
+    TMP_BASELINE="$(mktemp "${TMPDIR:-/tmp}/rig-tmux-baseline.XXXXXX")"
+    generate_config > "$TMP_BASELINE"
+
+    # Compare existing with recommended baseline
+    if cmp -s "$EXISTING_CONF" "$TMP_BASELINE"; then
+        echo ""
+        echo "  ✔ $EXISTING_CONF already matches the recommended baseline perfectly."
+        rm -f "$TMP_BASELINE"
+    else
+        echo ""
+        echo "  Notice: $EXISTING_CONF differs from the recommended baseline."
+        show_diff "$EXISTING_CONF" "$TMP_BASELINE"
+
+        if [[ -t 0 ]]; then
+            echo ""
+            echo "How would you like to handle your existing $EXISTING_CONF?"
+            echo "  [k] Keep existing configuration unchanged (default / safe)"
+            echo "  [o] Overwrite with recommended baseline (creates a Rig backup)"
+            echo "  [a] Append recommended baseline settings to end of file"
+            echo "  [d] Show diff again"
+            while true; do
+                read -r -p "Choice [K/o/a/d]: " choice || choice="k"
+                choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
+                case "$choice" in
+                    o|overwrite)
+                        BACKUP_CONF="$(rig_user_backup "$EXISTING_CONF" tmux)"
+                        cat "$TMP_BASELINE" > "$EXISTING_CONF"
+                        echo "  ✔ Backed up existing config to: $BACKUP_CONF"
+                        echo "  ✔ Overwrote $EXISTING_CONF with recommended baseline."
+                        break
+                        ;;
+                    a|append)
+                        BACKUP_CONF="$(rig_user_backup "$EXISTING_CONF" tmux)"
+                        {
+                            echo ""
+                            echo "# --- Appended by rig on $(date '+%Y-%m-%d %H:%M:%S') ---"
+                            cat "$TMP_BASELINE"
+                        } >> "$EXISTING_CONF"
+                        echo "  ✔ Backed up existing config to: $BACKUP_CONF"
+                        echo "  ✔ Appended baseline settings to $EXISTING_CONF."
+                        break
+                        ;;
+                    d|diff)
+                        show_diff "$EXISTING_CONF" "$TMP_BASELINE"
+                        ;;
+                    ""|k|keep)
+                        echo "  Keeping existing $EXISTING_CONF untouched."
+                        break
+                        ;;
+                    *)
+                        echo "  Invalid choice: please enter k, o, a, or d."
+                        ;;
+                esac
+            done
+        else
+            echo "  Non-interactive terminal: keeping existing $EXISTING_CONF untouched (default)."
+            if [[ "${#MISSING_CONF[@]}" -gt 0 ]]; then
+                echo "  Missing recommended options: ${MISSING_CONF[*]}"
+            fi
+        fi
+        rm -f "$TMP_BASELINE"
+    fi
+else
+    generate_config > "$TMUX_CONF"
+    echo "  created $TMUX_CONF"
+    if [[ -n "$CLIPBOARD_CMD" ]]; then
+        echo "  clipboard: $CLIPBOARD_CMD"
+    else
+        echo "  clipboard: OSC 52 (no display server or clipboard helper detected)"
+    fi
 fi
 
 echo ""
-echo "=== Done! ==="
-echo "Tmux: $(tmux -V 2>/dev/null || echo 'installed')"
-echo "Theme: Catppuccin Mocha"
-echo "Plugins: sensible, catppuccin, vim-tmux-navigator, yank, resurrect, continuum"
-if [ "$TMUX_KEYBINDS" -eq 1 ]; then
-    echo "Keybinds: custom (Ctrl+a prefix, | and - splits)"
-else
-    echo "Keybinds: default (set TMUX_KEYBINDS=1 to customize)"
+echo "=== Done ==="
+echo "tmux: $(tmux -V 2>/dev/null || echo 'not found')"
+if [[ -n "${TMUX:-}" ]]; then
+    echo "Run 'tmux source-file ${EXISTING_CONF:-$TMUX_CONF}' to reload."
 fi

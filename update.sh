@@ -3,12 +3,12 @@ set -uo pipefail
 
 # =============================================================================
 # Rig All-in-One Updater
-# https://github.com/X-Zero-L/rig
+# https://github.com/DieRingedesSaturn/rig
 #
 # Usage:
 #   bash update.sh                              # Interactive TUI
 #   bash update.sh --all                        # Update all installed
-#   bash update.sh --components codex,claude-code
+#   bash update.sh --components containers,node
 #   curl -fsSL <url>/update.sh | bash           # Interactive via pipe
 #   curl -fsSL <url>/update.sh | bash -s -- --all
 #
@@ -22,7 +22,7 @@ set -uo pipefail
 # Prevent gh-proxy.org from rewriting these URLs in proxied content
 _GH="github.com"
 _RAW="raw.githubusercontent.com"
-REPO="X-Zero-L/rig"
+REPO="DieRingedesSaturn/rig"
 BRANCH="master"
 BASE_URL="https://${_RAW}/${REPO}/${BRANCH}"
 
@@ -52,6 +52,9 @@ _load_lib() {
 _load_lib "os-detect.sh"
 _load_lib "pkg-maps.sh"
 _load_lib "pkg-manager.sh"
+_load_lib "rig-config.sh"
+_load_lib "containers.sh"
+_load_lib "backup.sh"
 
 # Restore shell options: lib files set -euo pipefail but update.sh must NOT use errexit
 set +e
@@ -60,6 +63,8 @@ INTERACTIVE=0
 VERBOSE=0
 LOG_FILE=""
 CURSOR_HIDDEN=0
+COMPONENTS_EXPLICIT=0
+SKIPPED_UNKNOWN=()
 
 # --- [B] ANSI Colors ---------------------------------------------------------
 
@@ -98,48 +103,42 @@ setup_colors() {
 
 # --- [C] Component Registry --------------------------------------------------
 
-COMP_IDS=(shell tmux git tools node uv go docker tailscale ssh claude-code codex gemini skills)
+COMP_IDS=(shell tmux git tools neovim node uv containers tailscale ssh security)
 
 COMP_NAMES=(
     "Shell Environment"
     "Tmux"
     "Git"
     "Essential Tools"
+    "Neovim"
     "Node.js (nvm)"
     "uv + Python"
-    "Go (goenv)"
-    "Docker"
+    "Containers"
     "Tailscale"
     "SSH"
-    "Claude Code"
-    "Codex CLI"
-    "Gemini CLI"
-    "Agent Skills"
+    "Security Baseline"
 )
 
 COMP_DESCS=(
-    "zsh, Oh My Zsh, plugins, Starship"
-    "tmux + Catppuccin + TPM plugins"
+    "zsh + Starship, no Oh My Zsh"
+    "tmux + mouse, large scrollback"
     "user.name + user.email + defaults"
     "rg, jq, fd, bat, gh, build tools"
-    "nvm + Node.js 24"
+    "Neovim modern editor"
+    "nvm + Node.js"
     "uv package manager"
-    "goenv + Go"
-    "Docker Engine + Compose + mirrors"
+    "Podman or Docker, rootless"
     "Tailscale VPN mesh network"
-    "SSH port + key-only + GitHub proxy"
-    "Claude Code CLI"
-    "OpenAI Codex CLI"
-    "Gemini CLI"
-    "Skills for all coding agents"
+    "OpenSSH server + keys + GitHub proxy"
+    "Firewall rules and SSH hardening policies"
 )
 
 # Whether component update needs sudo
-COMP_NEEDS_SUDO=(0 1 1 1 0 0 0 1 1 1 0 0 0 0)
+COMP_NEEDS_SUDO=(0 1 1 1 0 0 0 1 1 1 1)
 
 # Detection / selection / version state
-COMP_INSTALLED=(0 0 0 0 0 0 0 0 0 0 0 0 0 0)
-COMP_SELECTED=(0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+COMP_INSTALLED=(0 0 0 0 0 0 0 0 0 0 0)
+COMP_SELECTED=(0 0 0 0 0 0 0 0 0 0 0)
 VERSION_BEFORE=()
 VERSION_AFTER=()
 
@@ -211,7 +210,7 @@ print_banner() {
     printf "\n"
     printf "  ${CYAN}${BOLD}┌──────────────────────────────────────────┐${NC}\n"
     printf "  ${CYAN}${BOLD}│${NC}  ${BOLD}${WHITE}Rig Updater${NC}                             ${CYAN}${BOLD}│${NC}\n"
-    printf "  ${CYAN}${BOLD}│${NC}  ${DIM}${_GH}/${REPO}${NC}                 ${CYAN}${BOLD}│${NC}\n"
+    printf "  ${CYAN}${BOLD}│${NC}  ${DIM}${_GH}/${REPO}${NC}        ${CYAN}${BOLD}│${NC}\n"
     printf "  ${CYAN}${BOLD}└──────────────────────────────────────────┘${NC}\n"
     printf "\n"
 }
@@ -230,7 +229,7 @@ Only installed components are shown; all are selected by default.
 Options:
   --all                  Update all installed components
   --components LIST      Comma-separated component list:
-                         shell,tmux,git,tools,clash,node,uv,go,docker,tailscale,ssh,claude-code,codex,gemini,skills
+                         shell,tmux,git,tools,node,uv,containers,tailscale,ssh
   --gh-proxy URL         GitHub proxy URL (e.g., https://gh-proxy.org)
   -v, --verbose          Show raw command output (default: clean spinner)
   -h, --help             Show this help
@@ -242,7 +241,7 @@ Environment variables:
 Examples:
   bash update.sh                                    # Interactive
   bash update.sh --all                              # Update everything installed
-  bash update.sh --components codex,claude-code      # Specific components
+  bash update.sh --components containers,node       # Specific components
   bash update.sh --all --gh-proxy https://gh-proxy.org
 
   # Via curl
@@ -260,32 +259,23 @@ load_env() {
     fi
     # Add uv to PATH
     [[ -d "$HOME/.local/bin" ]] && export PATH="$HOME/.local/bin:$PATH"
-    # Load goenv if available
-    if [[ -d "$HOME/.goenv" ]]; then
-        export GOENV_ROOT="$HOME/.goenv"
-        export PATH="$GOENV_ROOT/bin:$PATH"
-        eval "$(goenv init -)" 2>/dev/null || true
-    fi
 }
 
 # --- [E] Detection -----------------------------------------------------------
 
 detect_installed() {
     local checks=(
-        "test -d $HOME/.oh-my-zsh"
+        "command -v zsh && command -v starship"
         "command -v tmux"
         "command -v git"
         "command -v rg && command -v jq"
+        "command -v nvim"
         "command -v nvm || [[ -f $HOME/.nvm/nvm.sh ]]"
         "command -v uv"
-        "command -v goenv || [[ -d $HOME/.goenv/bin ]]"
-        "command -v docker"
+        "command -v podman || command -v docker"
         "command -v tailscale"
         "test -f /etc/ssh/sshd_config"
-        "command -v claude"
-        "command -v codex"
-        "command -v gemini"
-        "test -d $HOME/.local/share/skills || test -d $HOME/.claude/skills"
+        "grep -q '# Rig Security Baseline' /etc/ssh/sshd_config 2>/dev/null || test -f '${RIG_SYSTEM_BACKUP_DIR}/etc__ssh__sshd_config.pre-rig' || ls /etc/ssh/sshd_config.rig.bak.* &>/dev/null"
     )
 
     for i in "${!checks[@]}"; do
@@ -311,8 +301,8 @@ get_version() {
         tools)
             ver=$(rg --version 2>/dev/null | head -1 | awk '{print $2}') || true
             ;;
-        clash)
-            ver="installed"
+        neovim)
+            ver=$(nvim --version 2>/dev/null | head -1 | awk '{print $2}') || true
             ;;
         node)
             ver=$(node -v 2>/dev/null) || true
@@ -320,11 +310,11 @@ get_version() {
         uv)
             ver=$(uv --version 2>/dev/null | awk '{print $2}') || true
             ;;
-        go)
-            ver=$(go version 2>/dev/null | awk '{print $3}' | sed 's/go//') || true
-            ;;
-        docker)
-            ver=$(docker --version 2>/dev/null | sed 's/Docker version //' | sed 's/,.*//') || true
+        containers)
+            local _engine
+            _engine="$(containers_engine)"
+            ver="$(containers_version "$_engine" 2>/dev/null || true)"
+            [[ -n "$ver" ]] && ver="$_engine $ver"
             ;;
         tailscale)
             ver=$(tailscale version 2>/dev/null | head -1) || true
@@ -332,17 +322,8 @@ get_version() {
         ssh)
             ver=$(ssh -V 2>&1 | awk '{print $1}' | sed 's/OpenSSH_//; s/,.*//') || true
             ;;
-        claude-code)
-            ver=$(claude --version 2>/dev/null | head -1) || true
-            ;;
-        codex)
-            ver=$(codex --version 2>/dev/null | head -1) || true
-            ;;
-        gemini)
-            ver=$(gemini --version 2>/dev/null | head -1) || true
-            ;;
-        skills)
-            ver="installed"
+        security)
+            ver="baseline active"
             ;;
     esac
     echo "${ver:-unknown}"
@@ -351,39 +332,24 @@ get_version() {
 # --- [F] Update Functions ----------------------------------------------------
 
 update_shell() {
-    # Oh My Zsh
-    if [[ -d "$HOME/.oh-my-zsh" ]]; then
-        env ZSH="$HOME/.oh-my-zsh" DISABLE_UPDATE_PROMPT=true \
-            bash "$HOME/.oh-my-zsh/tools/upgrade.sh" 2>/dev/null || true
-    fi
+    # Everything this component installs comes from the distro package manager.
+    pkg_update zsh starship zsh-autosuggestions zsh-syntax-highlighting 2>/dev/null || true
 
-    # Custom plugins (git pull each)
-    local zsh_custom="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
-    if [[ -d "$zsh_custom/plugins" ]]; then
-        for plugin_dir in "$zsh_custom/plugins/"*/; do
-            [[ -d "$plugin_dir/.git" ]] && git -C "$plugin_dir" pull --ff-only 2>/dev/null || true
-        done
-    fi
-
-    # Custom themes (git pull each)
-    if [[ -d "$zsh_custom/themes" ]]; then
-        for theme_dir in "$zsh_custom/themes/"*/; do
-            [[ -d "$theme_dir/.git" ]] && git -C "$theme_dir" pull --ff-only 2>/dev/null || true
-        done
-    fi
-
-    # Starship
-    if command -v starship &>/dev/null; then
-        sh -c "$(curl -fsSL https://starship.rs/install.sh)" -- -y 2>/dev/null || true
+    # Starship installed from upstream (on distros that don't package it) lives
+    # in ~/.local/bin and is updated by re-running its own installer.
+    if ! pkg_check_installed starship 2>/dev/null && [[ -x "$HOME/.local/bin/starship" ]]; then
+        sh -c "$(curl -fsSL https://starship.rs/install.sh)" -- -y -b "$HOME/.local/bin" 2>/dev/null || true
     fi
 }
 
 update_tmux() {
+    # The component installs nothing outside the package manager, so this is the
+    # whole update. No plugins or theme to pull.
     pkg_update tmux 2>/dev/null || true
 
-    # TPM plugin update
+    # Legacy: a TPM install left by an older version of this script.
     if [[ -x "$HOME/.tmux/plugins/tpm/bin/update_plugins" ]]; then
-        "$HOME/.tmux/plugins/tpm/bin/update_plugins" all 2>/dev/null || true
+        echo "  note: a legacy TPM install is present and was left alone."
     fi
 }
 
@@ -392,18 +358,8 @@ update_git() {
 }
 
 update_tools() {
-    pkg_update ripgrep jq fd bat tree shellcheck build-tools wget unzip xclip 2>/dev/null || true
+    pkg_update ripgrep jq fd bat tree shellcheck build-tools wget unzip xclip fastfetch 2>/dev/null || true
     pkg_update gh 2>/dev/null || true
-}
-
-update_clash() {
-    if [[ -d "$HOME/clash-for-linux" ]]; then
-        (
-            cd "$HOME/clash-for-linux" || exit 1
-            git pull --ff-only || true
-            sudo bash install.sh || true
-        )
-    fi
 }
 
 update_node() {
@@ -446,26 +402,37 @@ update_uv() {
     uv self update 2>/dev/null || true
 }
 
-update_go() {
-    if [[ -d "$HOME/.goenv" ]]; then
-        git -C "$HOME/.goenv" pull --ff-only 2>/dev/null || true
-        load_env
-        local latest
-        latest=$(goenv install --list 2>/dev/null | grep -E '^\s*[0-9]+\.[0-9]+\.[0-9]+$' | tail -1 | tr -d ' ')
-        if [[ -n "$latest" ]]; then
-            goenv install "$latest" 2>/dev/null || true
-            goenv global "$latest"
-        fi
-    fi
-}
+update_containers() {
+    local engine mode
+    engine="$(containers_engine)"
+    mode="$(containers_mode)"
 
-update_docker() {
-    if is_macos; then
-        # Docker Desktop on macOS manages its own updates
-        brew upgrade --cask docker 2>/dev/null || true
-    else
-        pkg_update docker-ce docker-ce-cli containerd.io docker-compose-plugin 2>/dev/null || true
-    fi
+    case "$engine" in
+        podman)
+            # Daemonless: upgrading the package is the whole update.
+            pkg_update podman 2>/dev/null || true
+            if is_macos; then
+                brew upgrade podman 2>/dev/null || true
+            fi
+            ;;
+        docker)
+            if is_macos; then
+                brew upgrade --cask docker 2>/dev/null || true
+            else
+                if [[ "$mode" == "rootless" ]]; then
+                    # docker-ce-rootless-extras carries dockerd-rootless-setuptool.sh
+                    pkg_update docker-ce docker-ce-cli containerd.io \
+                        docker-buildx-plugin docker-compose-plugin \
+                        docker-ce-rootless-extras 2>/dev/null || true
+                    systemctl --user restart docker 2>/dev/null || true
+                else
+                    pkg_update docker-ce docker-ce-cli containerd.io \
+                        docker-buildx-plugin docker-compose-plugin 2>/dev/null || true
+                    sudo systemctl restart docker 2>/dev/null || true
+                fi
+            fi
+            ;;
+    esac
 }
 
 update_tailscale() {
@@ -480,48 +447,26 @@ update_tailscale() {
     fi
 }
 
+update_neovim() {
+    if is_macos; then
+        brew upgrade neovim 2>/dev/null || true
+    else
+        pkg_update neovim 2>/dev/null || true
+    fi
+}
+
+update_security() {
+    if [[ -f "$SCRIPT_DIR/setup-security.sh" ]]; then
+        bash "$SCRIPT_DIR/setup-security.sh" --yes
+    fi
+}
+
 update_ssh() {
     if is_macos; then
         # macOS SSH is part of the OS; no package to upgrade
         return 0
     fi
     pkg_update openssh-server 2>/dev/null || true
-}
-
-update_claude_code() {
-    load_env
-    npm install -g @anthropic-ai/claude-code@latest
-}
-
-update_codex() {
-    load_env
-    npm install -g @openai/codex@latest
-}
-
-update_gemini() {
-    load_env
-    npm install -g @google/gemini-cli@latest
-}
-
-update_skills() {
-    load_env
-    local npm_mirror="${SKILLS_NPM_MIRROR:-}"
-    [[ -n "$GH_PROXY" && -z "$npm_mirror" ]] && npm_mirror="https://registry.npmmirror.com"
-
-    local flags=(-g -a '*' -y)
-    local skills=(
-        "vercel-labs/skills                --skill find-skills"
-        "anthropics/skills                 --skill pdf"
-        "X-Zero-L/agent-skills             --skill gemini-cli"
-        "intellectronica/agent-skills      --skill context7"
-        "obra/superpowers                  --skill writing-plans executing-plans"
-        "softaworks/agent-toolkit          --skill codex"
-    )
-
-    for entry in "${skills[@]}"; do
-        # shellcheck disable=SC2086
-        npx ${npm_mirror:+--registry="$npm_mirror"} skills add $entry "${flags[@]}" 2>/dev/null || true
-    done
 }
 
 run_update() {
@@ -531,17 +476,13 @@ run_update() {
         tmux)        update_tmux ;;
         git)         update_git ;;
         tools)       update_tools ;;
-        clash)       update_clash ;;
+        neovim)      update_neovim ;;
         node)        update_node ;;
         uv)          update_uv ;;
-        go)          update_go ;;
-        docker)      update_docker ;;
+        containers)  update_containers ;;
         tailscale)   update_tailscale ;;
         ssh)         update_ssh ;;
-        claude-code) update_claude_code ;;
-        codex)       update_codex ;;
-        gemini)      update_gemini ;;
-        skills)      update_skills ;;
+        security)    update_security ;;
     esac
 }
 
@@ -837,14 +778,33 @@ parse_args() {
                     echo "error: --components requires an argument" >&2
                     exit 1
                 fi
+                COMPONENTS_EXPLICIT=1
                 IFS=',' read -ra REQUESTED <<< "$2"
                 for req in "${REQUESTED[@]}"; do
                     req=$(echo "$req" | tr -d ' ')
+                    [[ -z "$req" ]] && continue
+                    local found=0
                     for i in "${!COMP_IDS[@]}"; do
                         if [[ "${COMP_IDS[$i]}" == "$req" ]]; then
                             COMP_SELECTED[$i]=1
+                            found=1
+                            break
                         fi
                     done
+                    if [[ $found -eq 0 ]]; then
+                        if [[ "$req" == "docker" ]]; then
+                            for i in "${!COMP_IDS[@]}"; do
+                                if [[ "${COMP_IDS[$i]}" == "containers" ]]; then
+                                    COMP_SELECTED[$i]=1
+                                    found=1
+                                    break
+                                fi
+                            done
+                        fi
+                    fi
+                    if [[ $found -eq 0 ]]; then
+                        SKIPPED_UNKNOWN+=("$req")
+                    fi
                 done
                 NON_INTERACTIVE=1
                 shift 2
@@ -882,7 +842,7 @@ main() {
     # Parse CLI arguments
     parse_args "$@"
 
-    # Load env early so detection can find nvm, goenv, etc.
+    # Load env early so detection can find nvm, etc.
     load_env
 
     # Determine interactive mode
@@ -892,7 +852,7 @@ main() {
         else
             echo "Error: No terminal available. Use --all or --components to specify what to update."
             echo "  Example: curl ... | bash -s -- --all"
-            echo "  Example: curl ... | bash -s -- --components codex,claude-code"
+            echo "  Example: curl ... | bash -s -- --components docker,node"
             exit 1
         fi
     fi
@@ -926,19 +886,16 @@ main() {
     done
 
     if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
-        # Check if --components was used (explicit selection)
-        local has_explicit=0
-        for s in "${COMP_SELECTED[@]}"; do
-            [[ "$s" -eq 1 ]] && has_explicit=1 && break
-        done
-
-        if [[ $has_explicit -eq 0 ]]; then
+        if [[ "$COMPONENTS_EXPLICIT" -eq 0 ]]; then
             # --all mode: select all installed
             for i in "${!COMP_INSTALLED[@]}"; do
                 COMP_SELECTED[$i]=${COMP_INSTALLED[$i]}
             done
         else
-            # --components mode: warn about non-installed selections
+            # --components mode: warn about unknown and non-installed selections
+            for req in "${SKIPPED_UNKNOWN[@]}"; do
+                printf "  ${SYM_WARN} ${YELLOW}%s${NC} ${DIM}is not installed, skipping${NC}\n" "$req"
+            done
             for i in "${!COMP_SELECTED[@]}"; do
                 if [[ "${COMP_SELECTED[$i]}" -eq 1 && "${COMP_INSTALLED[$i]}" -eq 0 ]]; then
                     printf "  ${SYM_WARN} ${YELLOW}%s${NC} ${DIM}is not installed, skipping${NC}\n" "${COMP_NAMES[$i]}"

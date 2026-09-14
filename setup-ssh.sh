@@ -23,6 +23,8 @@ source "$SCRIPT_DIR/lib/os-detect.sh"
 source "$SCRIPT_DIR/lib/pkg-maps.sh"
 # shellcheck source=lib/pkg-manager.sh
 source "$SCRIPT_DIR/lib/pkg-manager.sh"
+# shellcheck source=lib/backup.sh
+source "$SCRIPT_DIR/lib/backup.sh"
 
 SSH_PORT="${SSH_PORT:-}"
 SSH_PUBKEY="${SSH_PUBKEY:-}"
@@ -42,6 +44,15 @@ fi
 
 SSHD_CONFIG="/etc/ssh/sshd_config"
 CHANGED=0
+SSHD_BACKUP_CREATED=0
+
+backup_sshd_config() {
+    local backup
+    [[ "$SSHD_BACKUP_CREATED" -eq 0 ]] || return 0
+    backup="$(rig_system_backup "$SSHD_CONFIG" setup-ssh)"
+    echo "  Backup: $backup"
+    SSHD_BACKUP_CREATED=1
+}
 
 # Helper: determine the correct sshd service name
 _sshd_service_name() {
@@ -145,7 +156,7 @@ if [ -n "$SSH_PORT" ]; then
             if grep -qE "^\s*Port\s+${SSH_PORT}\b" "$SSHD_CONFIG"; then
                 echo "  Port already set to $SSH_PORT."
             else
-                sudo cp "$SSHD_CONFIG" "${SSHD_CONFIG}.bak.$(date +%s)"
+                backup_sshd_config
                 sudo sed -i'' -e '/^\s*#\{0,1\}\s*Port\s/d' "$SSHD_CONFIG"
                 echo "Port $SSH_PORT" | sudo tee -a "$SSHD_CONFIG" >/dev/null
                 echo "  Port set to $SSH_PORT."
@@ -156,7 +167,7 @@ if [ -n "$SSH_PORT" ]; then
         if grep -qE "^\s*Port\s+${SSH_PORT}\b" "$SSHD_CONFIG"; then
             echo "  Port already set to $SSH_PORT."
         else
-            sudo cp "$SSHD_CONFIG" "${SSHD_CONFIG}.bak.$(date +%s)"
+            backup_sshd_config
             sudo sed -i '/^\s*#\?\s*Port\s/d' "$SSHD_CONFIG"
             echo "Port $SSH_PORT" | sudo tee -a "$SSHD_CONFIG" >/dev/null
             echo "  Port set to $SSH_PORT."
@@ -186,44 +197,25 @@ else
     echo "  Skipped (SSH_PUBKEY not set)."
 fi
 
-# [5/6] Disable password auth (only if public key was provided)
-echo "[5/6] Configuring authentication..."
+# [5/6] Configure public key authentication
+echo "[5/6] Ensuring public key authentication is enabled..."
 if [ -n "$SSH_PUBKEY" ]; then
-    if is_macos; then
-        echo "  macOS: sshd_config authentication changes applied."
-        # macOS does support sshd_config edits, but uses sed -i'' (BSD sed)
-        if [ -f "$SSHD_CONFIG" ]; then
-            [ "$CHANGED" -eq 0 ] && sudo cp "$SSHD_CONFIG" "${SSHD_CONFIG}.bak.$(date +%s)"
-
-            sudo sed -i'' -e '/^\s*#\{0,1\}\s*PubkeyAuthentication\s/d' "$SSHD_CONFIG"
+    if [ -f "$SSHD_CONFIG" ]; then
+        if ! grep -qE '^\s*PubkeyAuthentication\s+yes' "$SSHD_CONFIG" 2>/dev/null; then
+            [ "$CHANGED" -eq 0 ] && backup_sshd_config
+            if is_macos; then
+                sudo sed -i'' -e '/^\s*#\{0,1\}\s*PubkeyAuthentication\s/d' "$SSHD_CONFIG"
+            else
+                sudo sed -i '/^\s*#\?\s*PubkeyAuthentication\s/d' "$SSHD_CONFIG"
+            fi
             echo "PubkeyAuthentication yes" | sudo tee -a "$SSHD_CONFIG" >/dev/null
-
-            sudo sed -i'' -e '/^\s*#\{0,1\}\s*PasswordAuthentication\s/d' "$SSHD_CONFIG"
-            echo "PasswordAuthentication no" | sudo tee -a "$SSHD_CONFIG" >/dev/null
-
-            sudo sed -i'' -e '/^\s*#\{0,1\}\s*KbdInteractiveAuthentication\s/d' "$SSHD_CONFIG"
-            echo "KbdInteractiveAuthentication no" | sudo tee -a "$SSHD_CONFIG" >/dev/null
-
-            echo "  Password auth disabled, key-only login enabled."
             CHANGED=1
         fi
-    else
-        [ "$CHANGED" -eq 0 ] && sudo cp "$SSHD_CONFIG" "${SSHD_CONFIG}.bak.$(date +%s)"
-
-        sudo sed -i '/^\s*#\?\s*PubkeyAuthentication\s/d' "$SSHD_CONFIG"
-        echo "PubkeyAuthentication yes" | sudo tee -a "$SSHD_CONFIG" >/dev/null
-
-        sudo sed -i '/^\s*#\?\s*PasswordAuthentication\s/d' "$SSHD_CONFIG"
-        echo "PasswordAuthentication no" | sudo tee -a "$SSHD_CONFIG" >/dev/null
-
-        sudo sed -i '/^\s*#\?\s*KbdInteractiveAuthentication\s/d' "$SSHD_CONFIG"
-        echo "KbdInteractiveAuthentication no" | sudo tee -a "$SSHD_CONFIG" >/dev/null
-
-        echo "  Password auth disabled, key-only login enabled."
-        CHANGED=1
+        echo "  Public key authentication enabled."
+        echo "  (Note: Root login and password authentication hardening are safely managed by the security module)"
     fi
 else
-    echo "  Skipped (no public key provided, password auth unchanged)."
+    echo "  Skipped (no public key provided)."
 fi
 
 # [6/6] Configure GitHub SSH proxy
@@ -270,6 +262,6 @@ echo ""
 echo "=== Done! ==="
 echo "SSH: $(ssh -V 2>&1)"
 [ -n "$SSH_PORT" ] && echo "Port: $SSH_PORT" || echo "Port: (default)"
-[ -n "$SSH_PUBKEY" ] && echo "Auth: key-only" || echo "Auth: (unchanged)"
+[ -n "$SSH_PUBKEY" ] && echo "Authorized Key: added" || echo "Authorized Key: (unchanged)"
 [ -n "$SSH_PRIVATE_KEY" ] && echo "Identity: imported" || echo "Identity: (unchanged)"
 [ -n "$SSH_PROXY_PORT" ] && echo "GitHub SSH: via $SSH_PROXY_HOST:$SSH_PROXY_PORT" || echo "GitHub SSH: (unchanged)"

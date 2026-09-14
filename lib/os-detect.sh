@@ -4,7 +4,7 @@ set -euo pipefail
 
 # =============================================================================
 # OS Detection Library
-# https://github.com/X-Zero-L/rig
+# https://github.com/DieRingedesSaturn/rig
 #
 # Detects OS family, distribution, version, and package manager.
 # Exports variables and convenience functions for multi-OS scripting.

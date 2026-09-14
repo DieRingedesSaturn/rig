@@ -15,8 +15,11 @@
 | 命令 | 脚本 | 说明 |
 |------|------|------|
 | `rig install` | `install.sh` | 安装组件（现支持 `--preset`） |
+| `rig apply --profile NAME` | `install.sh --preset NAME` | 应用主机 Profile（加 `--dry-run` 仅预览） |
 | `rig update` | `update.sh` | 更新已安装组件 |
 | `rig status` | `status.sh` | 显示已安装组件、版本、配置状态 |
+| `rig security` | `setup-security.sh` | 安全基线加固与端口审计（`rig security status` 查看报告） |
+| `rig doctor` | `status.sh --doctor` | 一键健康与安全诊断报告 |
 | `rig export` | `export-config.sh` | 导出配置为 JSON + 密钥文件 |
 | `rig import` | `import-config.sh` | 从导出文件导入配置 |
 | `rig uninstall` | `uninstall.sh` | 安全卸载组件 |
@@ -34,9 +37,10 @@
 | 预设 | 组件 | 适用场景 |
 |------|------|----------|
 | `minimal` | shell、tools、git | 轻量级基础环境 |
-| `agent` | shell、tools、git、node、claude-code、codex、gemini、skills | AI 编码代理开发 |
-| `devops` | shell、tools、git、node、go、docker、tailscale、ssh | 服务器和基础设施运维 |
-| `fullstack` | shell、tmux、git、tools、node、uv、go、docker、ssh、claude-code、codex、gemini、skills | 全栈开发全家桶 |
+| `agent` | shell、tools、git、node | Shell + 工具链 + Node.js 运行时 |
+| `devops` | shell、tools、git、node、containers、tailscale、ssh | 服务器和基础设施运维 |
+| `vps` | shell、git、tools、neovim、containers、tailscale、ssh、security | 生产 VPS 完整运维与安全加固基线 |
+| `fullstack` | shell、tmux、git、tools、node、uv、containers、ssh | 全栈开发全家桶 |
 
 ### 用法
 
@@ -45,7 +49,7 @@
 rig install --preset agent
 
 # 使用预设安装（通过 curl 非交互式）
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/install.sh | bash -s -- --preset minimal
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh | bash -s -- --preset minimal
 
 # 配合代理使用
 rig install --preset devops --gh-proxy https://gh-proxy.org
@@ -53,7 +57,7 @@ rig install --preset devops --gh-proxy https://gh-proxy.org
 
 预设设置初始组件选择。交互模式下 TUI 仍会出现，你可以在确认前增减组件。非交互模式（`curl | bash`）下直接使用预设选择。
 
-依赖自动解析 — 例如 `--preset agent` 包含 `node`，因为 `claude-code`、`codex` 和 `gemini` 依赖它。
+注册表中声明的依赖会自动解析。目前没有组件声明依赖。
 
 ## CLI 命令
 
@@ -77,7 +81,7 @@ rig install --all                    # 全部安装
 ```bash
 rig update                           # 交互式 — 从已安装中选择
 rig update --all                     # 更新所有已安装组件
-rig update --components codex,node   # 更新指定组件
+rig update --components containers,node  # 更新指定组件
 ```
 
 ### rig status
@@ -93,14 +97,11 @@ rig status
 ```
 Component               Status    Version              Config
 ─────────────────────────────────────────────────────────────────
-Shell Environment       ✔         zsh 5.9 / omz d07...  configured
+Shell Environment       ✔         zsh 5.9               configured
 Tmux                    ✘         —                      —
 Git                     ✔         2.43.0                 configured
 Essential Tools         ✔         rg 14.1 / jq 1.7      configured
 Node.js (nvm)           ✔         v24.1.0                configured
-Claude Code             ✔         1.0.12                 configured
-Codex CLI               ◐         0.1.5                  install-only
-Gemini CLI              ✘         —                      —
 ```
 
 状态符号：
@@ -141,8 +142,8 @@ rig import ~/.rig/rig-config.json
 带依赖检查和配置备份的组件卸载。
 
 ```bash
-rig uninstall docker             # 卸载 Docker（带安全检查）
-rig uninstall docker --force     # 跳过依赖检查
+rig uninstall containers         # 卸载容器后端（带安全检查）
+rig uninstall containers --force # 跳过依赖检查
 ```
 
 详见[卸载安全机制](#卸载安全机制)。
@@ -174,15 +175,13 @@ rig help
 - 已安装组件列表
 - Git 用户名和邮箱
 - Node.js 版本
-- Docker 镜像配置
+- 容器引擎与镜像源
 - Go 版本
 - 组件特定设置
 
 **敏感数据**（`secrets.env`）：
 
-- `CLAUDE_API_URL` 和 `CLAUDE_API_KEY`
-- `CODEX_API_URL` 和 `CODEX_API_KEY`
-- `GEMINI_API_URL` 和 `GEMINI_API_KEY`
+- `TAILSCALE_AUTH_KEY`
 
 ### JSON 格式
 
@@ -192,12 +191,12 @@ rig help
 {
   "version": "1",
   "exported_at": "2025-05-14T12:00:00Z",
-  "components": ["shell", "tools", "git", "node", "claude-code", "codex"],
+  "components": ["shell", "tools", "git", "node", "containers"],
   "config": {
     "git_user": "Your Name",
     "git_email": "you@example.com",
     "node_version": "24",
-    "docker_mirror": ""
+    "containers_engine": "podman"
   }
 }
 ```
@@ -207,12 +206,7 @@ rig help
 `secrets.env` 使用标准 shell 变量语法：
 
 ```bash
-CLAUDE_API_URL=https://api.anthropic.com
-CLAUDE_API_KEY=sk-ant-...
-CODEX_API_URL=https://api.openai.com
-CODEX_API_KEY=sk-...
-GEMINI_API_URL=https://generativelanguage.googleapis.com
-GEMINI_API_KEY=AI...
+TAILSCALE_AUTH_KEY=tskey-auth-xxxxx
 ```
 
 ### 安全注意事项
@@ -254,31 +248,25 @@ rig import /path/to/team-repo/rig-config.json
 卸载组件前，`uninstall.sh` 检查是否有其他已安装组件依赖它：
 
 ```bash
-$ rig uninstall node
-Error: Cannot uninstall Node.js — the following components depend on it:
-  - Claude Code
-  - Codex CLI
-  - Gemini CLI
-  - Agent Skills
+$ rig uninstall docker
+Error: Cannot uninstall Docker — the following components depend on it:
+  - some-future-component
 
 Use --force to override dependency checks.
 ```
 
 ### 配置备份
 
-配置文件在卸载前以 `.rig-backup` 后缀备份：
+Rig 创建的备份统一保存在 `~/.local/share/rig/backups/`，不会在用户主目录或 `/etc` 的原文件旁散落：
 
-| 组件 | 备份文件 |
+| 组件 | 备份来源 |
 |------|----------|
-| Shell | `~/.zshrc`、`~/.config/starship.toml` |
+| Shell | 无 —— 它从不写你的 `~/.zshrc` 或 `starship.toml` |
 | Tmux | `~/.tmux.conf` |
 | Git | `~/.gitconfig` |
 | SSH | `/etc/ssh/sshd_config` |
-| Claude Code | `~/.claude/` |
-| Codex CLI | `~/.codexrc` |
-| Gemini CLI | `~/.geminirc` |
 
-备份文件在卸载后保留，不会自动清理。
+用户配置进入 `backups/user/`，需要 sudo 读取的系统配置进入 `backups/system/`，两者最终都归当前用户所有。备份在卸载后保留，不会自动清理；旧版散落的 `.bak.*` / `.rig-backup` 仍可用于恢复。
 
 ### 数据保留提示
 
@@ -310,7 +298,7 @@ rig uninstall node --force    # 即使有依赖组件也卸载 Node.js
 
 ```bash
 # 安装 rig CLI
-curl -fsSL https://raw.githubusercontent.com/X-Zero-L/rig/master/install.sh | bash -s -- --preset agent
+curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh | bash -s -- --preset agent
 
 # 验证安装结果
 rig status
@@ -324,8 +312,8 @@ rig status
 # 从最小基础开始
 rig install --preset minimal
 
-# 之后添加 Docker 和 Go
-rig install --components docker,go
+# 之后添加容器和 Python 工具链
+rig install --components containers,uv
 ```
 
 已安装的组件会自动跳过 — `install.sh` 是幂等的。
@@ -351,7 +339,7 @@ rig import rig-config.json
 rig status
 
 # 卸载组件（带安全检查）
-rig uninstall docker
+rig uninstall containers
 
 # 需要时强制卸载
 rig uninstall node --force

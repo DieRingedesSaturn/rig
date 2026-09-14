@@ -310,12 +310,8 @@ jobs:
           - component: tools
             script: setup-tools.sh
             deps: ""
-            verify: "rg jq tree shellcheck gcc wget unzip xclip"
+            verify: "rg jq tree shellcheck gcc wget unzip"
 
-          - component: clash
-            script: setup-clash.sh
-            deps: ""
-            verify: ""
 
           - component: node
             script: setup-node.sh
@@ -327,15 +323,13 @@ jobs:
             deps: ""
             verify: "uv"
 
-          - component: go
-            script: setup-go.sh
-            deps: ""
-            verify: "go"
-
-          - component: docker
-            script: setup-docker.sh
+          - component: containers
+            script: setup-containers.sh
             deps: ""
             verify: "docker"
+            # GitHub runners have no systemd --user session, so the rootless
+            # path cannot be exercised here. Rootful is a real install path.
+            matrix_env: "RIG_CONTAINER_MODE=rootful"
 
           - component: tailscale
             script: setup-tailscale.sh
@@ -346,26 +340,6 @@ jobs:
             script: setup-ssh.sh
             deps: ""
             verify: "sshd"
-
-          - component: claude-code
-            script: setup-claude-code.sh
-            deps: setup-node.sh
-            verify: "claude"
-
-          - component: codex
-            script: setup-codex.sh
-            deps: setup-node.sh
-            verify: "codex"
-
-          - component: gemini
-            script: setup-gemini.sh
-            deps: setup-node.sh
-            verify: "gemini"
-
-          - component: skills
-            script: setup-skills.sh
-            deps: setup-node.sh
-            verify: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -382,11 +356,10 @@ jobs:
           export NVM_DIR="$HOME/.nvm"
           [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
           export PATH="$HOME/.local/bin:$PATH"
-          [ -d "$HOME/.goenv" ] && {
-            export GOENV_ROOT="$HOME/.goenv"
-            export PATH="$GOENV_ROOT/bin:$PATH"
-            eval "$(goenv init -)" 2>/dev/null || true
-          }
+          # Optional per-entry overrides (e.g. containers needs rootful in CI)
+          if [ -n "${{ matrix.matrix_env }}" ]; then
+            export ${{ matrix.matrix_env }}
+          fi
           bash ${{ matrix.script }}
 
       - name: Verify commands
@@ -397,11 +370,6 @@ jobs:
           export NVM_DIR="$HOME/.nvm"
           [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
           export PATH="$HOME/.local/bin:$PATH"
-          [ -d "$HOME/.goenv" ] && {
-            export GOENV_ROOT="$HOME/.goenv"
-            export PATH="$GOENV_ROOT/bin:$PATH"
-            eval "$(goenv init -)" 2>/dev/null || true
-          }
 
           failed=0
           for cmd in ${{ matrix.verify }}; do
@@ -451,12 +419,6 @@ jobs:
             deps: ""
             verify: "uv"
 
-          # Test go install on macOS
-          - component: go
-            script: setup-go.sh
-            deps: ""
-            verify: "go"
-
     steps:
       - uses: actions/checkout@v4
 
@@ -471,12 +433,18 @@ jobs:
           export NVM_DIR="$HOME/.nvm"
           [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
           export PATH="$HOME/.local/bin:$PATH"
-          [ -d "$HOME/.goenv" ] && {
-            export GOENV_ROOT="$HOME/.goenv"
-            export PATH="$GOENV_ROOT/bin:$PATH"
-            eval "$(goenv init -)" 2>/dev/null || true
-          }
+          # Optional per-entry overrides (e.g. containers needs rootful in CI)
+          if [ -n "${{ matrix.matrix_env }}" ]; then
+            export ${{ matrix.matrix_env }}
+          fi
           bash ${{ matrix.script }}
+
+      - name: Bash 3.2 compatibility regressions
+        if: matrix.component == 'tools'
+        shell: bash
+        run: |
+          /bin/bash -n rig install.sh uninstall.sh update.sh status.sh export-config.sh import-config.sh setup-*.sh lib/*.sh tests/*.sh
+          /bin/bash tests/test-config-security.sh
 
       - name: Verify commands
         if: matrix.verify != ''
@@ -485,11 +453,6 @@ jobs:
           export NVM_DIR="$HOME/.nvm"
           [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
           export PATH="$HOME/.local/bin:$PATH"
-          [ -d "$HOME/.goenv" ] && {
-            export GOENV_ROOT="$HOME/.goenv"
-            export PATH="$GOENV_ROOT/bin:$PATH"
-            eval "$(goenv init -)" 2>/dev/null || true
-          }
 
           failed=0
           for cmd in ${{ matrix.verify }}; do
@@ -610,42 +573,26 @@ jobs:
               failed=1
             fi
           done
-          # Ubuntu-only tools (xclip, gcc/unzip already present on macOS)
+          # Ubuntu-only tools (gcc/unzip already present on macOS).
+          # No clipboard helper: CI runners have no display server.
           if [[ "$(uname -s)" == "Linux" ]]; then
-            for cmd in gcc unzip xclip; do
+            for cmd in gcc unzip; do
               command -v "$cmd" > /dev/null || { echo "✘ $cmd"; failed=1; }
               echo "✔ $cmd"
             done
           fi
           exit $failed
 
-      - name: "Test: dependency resolution (claude-code -> node)"
-        run: bash /tmp/install-local.sh --components claude-code --verbose
-
-      - name: Verify dependency auto-added node
-        shell: bash
-        run: |
-          export NVM_DIR="$HOME/.nvm"
-          [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
-          command -v node || { echo "✘ node not auto-installed"; exit 1; }
-          command -v claude || { echo "✘ claude not installed"; exit 1; }
-          echo "✔ Dependency resolution: claude-code pulled in node"
-
       - name: "Test: --components with multiple items"
-        run: bash /tmp/install-local.sh --components uv,go --verbose
+        run: bash /tmp/install-local.sh --components uv,git --verbose
 
       - name: Verify multi-component install
         shell: bash
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          [ -d "$HOME/.goenv" ] && {
-            export GOENV_ROOT="$HOME/.goenv"
-            export PATH="$GOENV_ROOT/bin:$PATH"
-            eval "$(goenv init -)" 2>/dev/null || true
-          }
           command -v uv || { echo "✘ uv"; exit 1; }
-          command -v go || { echo "✘ go"; exit 1; }
-          echo "✔ Multi-component install: uv + go"
+          command -v git || { echo "✘ git"; exit 1; }
+          echo "✔ Multi-component install: uv + git"
 
   # ── Job 5: update.sh E2E ──────────────────────────────────────────────
   update-e2e:
@@ -696,7 +643,7 @@ jobs:
           export NVM_DIR="$HOME/.nvm"
           [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
           export PATH="$HOME/.local/bin:$PATH"
-          output=$(bash update.sh --components gemini 2>&1) || true
+          output=$(bash update.sh --components go 2>&1) || true
           echo "$output"
           echo "$output" | grep -q "not installed, skipping" || { echo "FAIL: should warn about non-installed"; exit 1; }
           echo "✔ Non-installed component correctly skipped"
@@ -813,6 +760,9 @@ jobs:
           bash import-config.sh /tmp/nonexistent.json 2>&1 && { echo "FAIL: should fail with missing file"; exit 1; } || true
           echo "✔ import-config.sh validation works"
 
+      - name: "Test: config import and security rendering regressions"
+        run: bash tests/test-config-security.sh
+
       - name: "Test: uninstall.sh — help"
         run: |
           output=$(bash uninstall.sh --help 2>&1) || true
@@ -823,6 +773,6 @@ jobs:
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           # uninstall.sh should handle non-installed components gracefully
-          output=$(bash uninstall.sh --components clash --yes 2>&1) || true
+          output=$(bash uninstall.sh --components tailscale --yes 2>&1) || true
           echo "$output"
           echo "✔ uninstall.sh handles non-installed components"

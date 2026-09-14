@@ -26,19 +26,18 @@ Configures SSH server: custom port, key-only authentication, and GitHub SSH prox
 | Port | Custom SSH port (optional) |
 | Private key | Imported to `~/.ssh/` for outbound SSH (e.g. GitHub) |
 | Public key | Added to `~/.ssh/authorized_keys` for inbound SSH |
-| Password auth | Disabled when public key is provided |
 | GitHub SSH proxy | `~/.ssh/config` with port 443 + corkscrew proxy (optional) |
+| Hardening | Password & root login restrictions are handled by `setup-security.sh` |
 
 ## How It Works
 
 | Step | Action |
 |------|--------|
-| 1/6 | Ensure `sshd` is installed and running |
-| 2/6 | Import private key to `~/.ssh/` (if `SSH_PRIVATE_KEY` is set), derive `.pub` |
-| 3/6 | Set custom port in `sshd_config` (if `SSH_PORT` is set) |
-| 4/6 | Add public key to `~/.ssh/authorized_keys` (if `SSH_PUBKEY` is set) |
-| 5/6 | Disable password auth, enable key-only login (only if `SSH_PUBKEY` is set) |
-| 6/6 | Configure GitHub SSH proxy in `~/.ssh/config` (if `SSH_PROXY_PORT` is set) |
+| 1/5 | Ensure `sshd` is installed and running |
+| 2/5 | Import private key to `~/.ssh/` (if `SSH_PRIVATE_KEY` is set), derive `.pub` |
+| 3/5 | Set custom port in `sshd_config` (if `SSH_PORT` is set) |
+| 4/5 | Add public key to `~/.ssh/authorized_keys` (if `SSH_PUBKEY` is set) |
+| 5/5 | Configure GitHub SSH proxy in `~/.ssh/config` (if `SSH_PROXY_PORT` is set) |
 
 ## Files Created/Modified
 
@@ -56,7 +55,7 @@ Configures SSH server: custom port, key-only authentication, and GitHub SSH prox
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SSH_PORT` | _(empty)_ | Custom SSH port. Leave empty to keep current port. |
-| `SSH_PUBKEY` | _(empty)_ | Public key string (e.g. `ssh-ed25519 AAAA...`). When set, adds the key and disables password auth. |
+| `SSH_PUBKEY` | _(empty)_ | Public key string (e.g. `ssh-ed25519 AAAA...`). When set, adds the key to `authorized_keys` (password hardening is performed by security component). |
 | `SSH_PRIVATE_KEY` | _(empty)_ | Private key content. When set, writes to `~/.ssh/` and derives public key. Key type auto-detected. |
 | `SSH_PROXY_HOST` | `127.0.0.1` | Proxy host for GitHub SSH. Only used when `SSH_PROXY_PORT` is set. |
 | `SSH_PROXY_PORT` | _(empty)_ | Proxy port (e.g. `7890`). When set, configures `~/.ssh/config` to connect to GitHub via `ssh.github.com:443` through a corkscrew proxy. Useful when port 22 is blocked or a proxy is required. |
@@ -67,7 +66,6 @@ Configures SSH server: custom port, key-only authentication, and GitHub SSH prox
 - Port: skipped if already set to the target port.
 - Private key: skipped if key file already exists.
 - Public key: skipped if already in `authorized_keys`.
-- Password auth: always reconfigured when `SSH_PUBKEY` is set.
 - GitHub SSH config: skipped if `Host github.com` block already exists in `~/.ssh/config`.
 - `sshd_config` is backed up before each modification.
 

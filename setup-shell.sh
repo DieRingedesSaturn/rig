@@ -1,7 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Source library dependencies
+# =============================================================================
+# Shell Environment Setup (lightweight)
+# https://github.com/DieRingedesSaturn/rig
+#
+# zsh + Starship + autosuggestions + syntax-highlighting, taken from the distro
+# package manager. No Oh My Zsh, no framework, no git clones, no curl|sh for
+# anything the distro already packages.
+#
+# Non-negotiable contract — this script never overwrites a file it did not
+# create itself:
+#
+#   ~/.zshrc                  read-only, always
+#   ~/.config/starship.toml   created only when absent
+#   default login shell       reported, never changed
+#
+# Everything already on disk is treated as yours and left alone. Anything the
+# script cannot do without editing your files is printed as a checklist at the
+# end instead of being done behind your back.
+# =============================================================================
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/os-detect.sh
 source "$SCRIPT_DIR/lib/os-detect.sh"
@@ -10,104 +29,257 @@ source "$SCRIPT_DIR/lib/pkg-maps.sh"
 # shellcheck source=lib/pkg-manager.sh
 source "$SCRIPT_DIR/lib/pkg-manager.sh"
 
-_GH="github.com"
-_RAW="raw.githubusercontent.com"
-GH_PROXY="${GH_PROXY:-}"
+STARSHIP_REF="https://starship.rs/config/"
+ZSHRC="$HOME/.zshrc"
+STARSHIP_TOML="$HOME/.config/starship.toml"
+MISSING_ZSHRC=()
+NOT_INSTALLED=()
 
-echo "=== Shell Environment Setup ==="
+echo "=== Shell Environment Setup (lightweight) ==="
+echo "  platform: $OS_DISTRO ($OS_FAMILY, $PKG_MANAGER)"
+echo ""
 
-# 1. Install dependencies
-echo "[1/6] Installing packages..."
-pkg_install zsh git curl wget vim
+# --- [1/5] Packages ----------------------------------------------------------
 
-# 2. Install Oh My Zsh (unattended)
-echo "[2/6] Installing Oh My Zsh..."
-if [ -d "$HOME/.oh-my-zsh" ] && [ -f "$HOME/.oh-my-zsh/oh-my-zsh.sh" ]; then
-    echo "  Oh My Zsh already installed, skipping."
+echo "[1/5] Installing packages..."
+
+if is_macos; then
+    # zsh and curl ship with macOS; Homebrew is only used for what follows.
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Error: curl is missing on macOS." >&2
+        exit 1
+    fi
+    echo "  zsh + curl are built in on macOS"
 else
-    # Clean up partial install
-    [ -d "$HOME/.oh-my-zsh" ] && rm -rf "$HOME/.oh-my-zsh"
-    OMZ_URL="https://${_RAW}/ohmyzsh/ohmyzsh/master/tools/install.sh"
-    [ -n "$GH_PROXY" ] && OMZ_URL="${GH_PROXY%/}/${OMZ_URL}"
-    RUNZSH=no CHSH=no sh -c "$(curl -fsSL "$OMZ_URL")"
+    pkg_install zsh curl
 fi
 
-ZSH_CUSTOM="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
+if ! command -v zsh >/dev/null 2>&1; then
+    echo "Error: zsh is still not available after installation." >&2
+    exit 1
+fi
+echo "  zsh: $(command -v zsh) ($(zsh --version 2>/dev/null | awk '{print $2}'))"
 
-# 3. Install zsh plugins
-echo "[3/6] Installing zsh plugins..."
-
-install_zsh_plugin() {
-    local name="$1" url="$2"
-    local dest="$ZSH_CUSTOM/plugins/$name"
-    if [ -d "$dest" ] && [ -f "$dest/${name}.plugin.zsh" ]; then
-        echo "  $name already installed."
+# Starship and the two plugins come from the distro when it packages them.
+# A package that is missing is not fatal: Starship has an upstream installer
+# (step 2) and the plugin report at the end says what to do.
+for pkg in starship zsh-autosuggestions zsh-syntax-highlighting; do
+    if [[ -z "$(pkg_map "$pkg")" ]]; then
+        echo "  not packaged on $OS_FAMILY: $pkg"
+    elif pkg_check_installed "$pkg"; then
+        echo "  already installed: $pkg"
+    elif pkg_install "$pkg" >/dev/null 2>&1; then
+        echo "  installed: $pkg"
     else
-        # Clean up partial clone
-        [ -d "$dest" ] && rm -rf "$dest"
-        [ -n "$GH_PROXY" ] && url="${GH_PROXY%/}/${url}"
-        git clone --depth=1 "$url" "$dest"
+        echo "  unavailable from $PKG_MANAGER: $pkg"
     fi
+done
+
+# --- [2/5] Starship ----------------------------------------------------------
+
+echo ""
+echo "[2/5] Ensuring Starship..."
+
+if command -v starship >/dev/null 2>&1; then
+    echo "  found: $(command -v starship)"
+else
+    # Not packaged — fall back to the upstream installer, into ~/.local/bin so
+    # we stay out of the package manager's way and need no sudo.
+    echo "  not packaged, using the upstream installer -> ~/.local/bin"
+    mkdir -p "$HOME/.local/bin"
+    if curl -fsSL https://starship.rs/install.sh | sh -s -- -y -b "$HOME/.local/bin" >/dev/null 2>&1 \
+        && [[ -x "$HOME/.local/bin/starship" ]]; then
+        echo "  installed: $HOME/.local/bin/starship"
+        case ":$PATH:" in
+            *":$HOME/.local/bin:"*) ;;
+            *) echo "  NOTE: $HOME/.local/bin is not on your PATH — add it to your shell rc" ;;
+        esac
+    else
+        echo "  WARNING: Starship could not be installed — see https://starship.rs" >&2
+    fi
+fi
+
+# --- [3/5] Locate the zsh plugins -------------------------------------------
+
+# Package managers disagree about where these land, so probe a candidate list
+# instead of hardcoding one path per distro.
+
+plugin_candidates() {
+    local name="$1" file="$2"
+    case "$OS_FAMILY" in
+        macos)
+            echo "/opt/homebrew/share/${name}/${file}"  # Apple Silicon
+            echo "/usr/local/share/${name}/${file}"     # Intel
+            ;;
+        arch)
+            echo "/usr/share/zsh/plugins/${name}/${file}"
+            echo "/usr/share/${name}/${file}"
+            ;;
+        *)
+            echo "/usr/share/${name}/${file}"
+            echo "/usr/local/share/${name}/${file}"
+            ;;
+    esac
 }
 
-install_zsh_plugin zsh-autosuggestions "https://${_GH}/zsh-users/zsh-autosuggestions"
-install_zsh_plugin zsh-syntax-highlighting "https://${_GH}/zsh-users/zsh-syntax-highlighting"
+find_plugin() {
+    local name="$1" file="$2" candidate
+    while IFS= read -r candidate; do
+        if [[ -f "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done < <(plugin_candidates "$name" "$file")
+    return 1
+}
 
-# 4. Configure .zshrc plugins
-echo "[4/6] Configuring .zshrc plugins..."
-ZSHRC="$HOME/.zshrc"
-if [ ! -f "$ZSHRC" ]; then
-    echo "  Warning: .zshrc not found, skipping plugin configuration."
-elif grep -q 'zsh-autosuggestions' "$ZSHRC"; then
-    echo "  Plugins already configured."
+echo ""
+echo "[3/5] Locating zsh plugins..."
+AUTOSUGGEST_FILE="$(find_plugin zsh-autosuggestions zsh-autosuggestions.zsh || true)"
+SYNTAX_FILE="$(find_plugin zsh-syntax-highlighting zsh-syntax-highlighting.zsh || true)"
+
+if [[ -n "$AUTOSUGGEST_FILE" ]]; then
+    echo "  zsh-autosuggestions:     $AUTOSUGGEST_FILE"
 else
-    # Try the standard pattern first; if it doesn't match, append after any plugins=(...) line
-    if grep -q '^plugins=(git)' "$ZSHRC"; then
-        sed -i 's/^plugins=(git)/plugins=(git zsh-autosuggestions zsh-syntax-highlighting z)/' "$ZSHRC"
-    elif grep -q '^plugins=(' "$ZSHRC"; then
-        # Insert our plugins into the existing plugins list (before the closing paren)
-        sed -i 's/^plugins=(\(.*\))/plugins=(\1 zsh-autosuggestions zsh-syntax-highlighting z)/' "$ZSHRC"
+    echo "  zsh-autosuggestions:     not found"
+fi
+if [[ -n "$SYNTAX_FILE" ]]; then
+    echo "  zsh-syntax-highlighting: $SYNTAX_FILE"
+else
+    echo "  zsh-syntax-highlighting: not found"
+fi
+
+# --- [4/5] Starship configuration -------------------------------------------
+
+# Created only when absent. An existing config is yours — it is never
+# overwritten, not even to "upgrade" it to a preset.
+
+echo ""
+echo "[4/5] Starship configuration..."
+if [[ -f "$STARSHIP_TOML" ]]; then
+    echo "  keeping existing $STARSHIP_TOML (left untouched)"
+else
+    cat > "$STARSHIP_TOML" <<'EOF'
+# Starship configuration — reference: https://starship.rs/config/
+
+format = """
+$directory$git_branch$git_status$python$conda$nodejs$time
+$character"""
+
+[directory]
+truncation_length = 3
+truncate_to_repo = true
+style = "bold cyan"
+read_only = " 🔒"
+
+[time]
+disabled = false
+time_format = "%R"
+format = "[\\[$time\\]]($style) "
+style = "dimmed white"
+
+[python]
+disabled = false
+format = "[$symbol$version( \\($virtualenv\\))]($style) "
+symbol = "🐍 "
+style = "bold yellow"
+
+[conda]
+disabled = false
+format = "[$symbol$environment]($style) "
+symbol = "📦 "
+style = "bold green"
+
+[nodejs]
+disabled = false
+format = "[$symbol($version )]($style)"
+symbol = "⬢ "
+style = "bold green"
+EOF
+    echo "  created default $STARSHIP_TOML"
+fi
+
+# --- [5/5] Read-only check of your shell configuration ----------------------
+
+echo ""
+echo "[5/5] Checking your shell configuration (read-only)..."
+
+# Read-only inspection helpers for $ZSHRC. Comment lines are ignored so a
+# commented-out entry is never mistaken for an active one.
+rc_lines() {
+    grep -n "$1" "$ZSHRC" 2>/dev/null | grep -v ':[[:space:]]*#' || true
+}
+rc_has()  { [[ -f "$ZSHRC" ]] && [[ -n "$(rc_lines "$1")" ]]; }
+rc_line() { rc_lines "$1" | head -1 | cut -d: -f1; }
+
+check_plugin() {
+    local name="$1" file="$2"
+    if [[ -z "$file" ]]; then
+        echo "  [$name] not found on disk — install package '$name' for $OS_DISTRO"
+        NOT_INSTALLED+=("$name")
+    elif rc_has "$name"; then
+        echo "  [$name] installed and loaded by .zshrc"
     else
-        echo 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting z)' >> "$ZSHRC"
+        echo "  [$name] installed at $file but NOT loaded by .zshrc"
+        MISSING_ZSHRC+=("source $file")
+    fi
+    return 0
+}
+
+check_plugin zsh-autosuggestions "$AUTOSUGGEST_FILE"
+check_plugin zsh-syntax-highlighting "$SYNTAX_FILE"
+
+if rc_has 'starship init'; then
+    echo "  [starship] initialized in .zshrc"
+else
+    echo "  [starship] init line NOT present in .zshrc"
+    MISSING_ZSHRC+=('eval "$(starship init zsh)"')
+fi
+
+# Advisory: upstream requires zsh-syntax-highlighting to be sourced last,
+# because it wraps the ZLE line editor. Anything sourcing after it can end up
+# bypassing the highlighting widget.
+if [[ -n "$SYNTAX_FILE" && -f "$ZSHRC" ]]; then
+    syntax_line="$(rc_line 'zsh-syntax-highlighting')"
+    if [[ -n "$syntax_line" ]]; then
+        later="$(awk -v s="$syntax_line" 'NR > s && (/zsh-autosuggestions/ || /starship init/)' "$ZSHRC" | wc -l | tr -d ' ')"
+        if [[ "$later" -gt 0 ]]; then
+            echo ""
+            echo "  note: zsh-syntax-highlighting is sourced at line $syntax_line, but"
+            echo "        $later later line(s) load autosuggestions/starship after it."
+            echo "        Upstream recommends it be sourced last. Optional to change."
+        fi
     fi
 fi
 
-# 5. Install Starship prompt (non-interactive)
-echo "[5/6] Installing Starship..."
-if command -v starship &>/dev/null; then
-    echo "  Starship already installed."
+# --- Report ------------------------------------------------------------------
+
+echo ""
+if [[ "${#MISSING_ZSHRC[@]}" -eq 0 && "${#NOT_INSTALLED[@]}" -eq 0 ]]; then
+    echo "  ✔ Everything is already wired up in $ZSHRC — nothing to add."
 else
-    curl -sS https://starship.rs/install.sh | sh -s -- -y
-fi
-
-# Add starship init to .zshrc if not already present
-if [ -f "$ZSHRC" ] && ! grep -q 'starship init zsh' "$ZSHRC"; then
-    echo '' >> "$ZSHRC"
-    echo 'eval "$(starship init zsh)"' >> "$ZSHRC"
-fi
-
-# 6. Apply Starship preset
-echo "[6/6] Applying Starship preset..."
-mkdir -p "$HOME/.config"
-if starship preset catppuccin-powerline -o "$HOME/.config/starship.toml" 2>/dev/null; then
-    echo "  Applied catppuccin-powerline preset."
-elif starship preset pastel-powerline -o "$HOME/.config/starship.toml" 2>/dev/null; then
-    echo "  Applied pastel-powerline preset (catppuccin-powerline unavailable in this version)."
-else
-    echo "  Warning: Could not apply preset, using default Starship config."
-fi
-
-# 7. Change default shell to zsh
-echo "Changing default shell to zsh..."
-if [ "$SHELL" != "$(which zsh)" ]; then
-    if is_macos; then
-        # macOS chsh does not require sudo
-        chsh -s "$(which zsh)"
-    else
-        # Linux requires sudo for chsh
-        sudo chsh -s "$(which zsh)" "$USER"
+    if [[ "${#NOT_INSTALLED[@]}" -gt 0 ]]; then
+        echo "  Not installed on this machine: ${NOT_INSTALLED[*]}"
+        echo "  Your $ZSHRC may already reference them — those lines fail until installed."
+    fi
+    if [[ "${#MISSING_ZSHRC[@]}" -gt 0 ]]; then
+        echo "  Add these lines to $ZSHRC yourself; this script does not edit it:"
+        for line in "${MISSING_ZSHRC[@]}"; do
+            echo "      $line"
+        done
     fi
 fi
 
 echo ""
-echo "=== Done! Run 'exec zsh' or open a new terminal to start using zsh. ==="
+current_shell="$(getent passwd "$USER" 2>/dev/null | cut -d: -f7 || true)"
+[[ -z "$current_shell" ]] && current_shell="${SHELL:-unknown}"
+if [[ "$current_shell" == *zsh ]]; then
+    echo "  ✔ default login shell: $current_shell"
+else
+    echo "  ✘ default login shell: $current_shell (not zsh)"
+    echo "    Not changed automatically — run this yourself:"
+    echo "        chsh -s $(command -v zsh)"
+fi
+
+echo ""
+echo "=== Done ==="

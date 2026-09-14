@@ -9,6 +9,10 @@ source "$SCRIPT_DIR/lib/os-detect.sh"
 source "$SCRIPT_DIR/lib/pkg-maps.sh"
 # shellcheck source=lib/pkg-manager.sh
 source "$SCRIPT_DIR/lib/pkg-manager.sh"
+# shellcheck source=lib/rig-config.sh
+source "$SCRIPT_DIR/lib/rig-config.sh"
+# shellcheck source=lib/tools.sh
+source "$SCRIPT_DIR/lib/tools.sh"
 
 echo "=== Essential Tools Setup ==="
 
@@ -25,15 +29,38 @@ if is_macos; then
     fi
 fi
 
-# Core tools (pkg_install auto-maps names per OS and skips unavailable ones)
-pkg_install ripgrep jq fd bat tree shellcheck build-tools wget unzip
-# xclip: skip on macOS (pbcopy is built-in); pkg_map returns "" on macOS anyway
-if ! is_macos; then
-    pkg_install xclip
+# Core tools (pkg_install auto-maps names per OS and skips unavailable ones).
+# Install only missing capabilities, not merely missing package names: for
+# example Fedora's wget2-wget already provides a valid `wget` command.
+TOOL_PACKAGES=(ripgrep jq fd bat tree shellcheck build-tools wget unzip fastfetch)
+MISSING_TOOL_PACKAGES=()
+for tool_pkg in "${TOOL_PACKAGES[@]}"; do
+    if tools_command_available "$tool_pkg"; then
+        echo "  already available: $tool_pkg"
+    else
+        MISSING_TOOL_PACKAGES+=("$tool_pkg")
+    fi
+done
+if [[ ${#MISSING_TOOL_PACKAGES[@]} -gt 0 ]]; then
+    pkg_install "${MISSING_TOOL_PACKAGES[@]}"
 fi
 
-# [2/3] Install GitHub CLI
-echo "[2/3] Installing GitHub CLI..."
+# Clipboard helper — which one is correct depends on the session, not on taste:
+#   macOS          -> pbcopy, already part of the OS
+#   Wayland        -> wl-clipboard (wl-copy / wl-paste)
+#   X11            -> xclip
+#   headless / VPS -> neither; there is no display server to talk to
+# Override with RIG_CLIPBOARD_TOOL=auto|pbcopy|wl-copy|xclip|none
+CLIPBOARD_PKG="$(tools_clipboard_package)"
+if [[ -n "$CLIPBOARD_PKG" ]]; then
+    echo "  clipboard helper: $CLIPBOARD_PKG ($(tools_clipboard_origin))"
+    pkg_install "$CLIPBOARD_PKG"
+else
+    echo "  clipboard helper: none needed ($(tools_clipboard_origin))"
+fi
+
+# [2/4] Install GitHub CLI
+echo "[2/4] Installing GitHub CLI..."
 if command -v gh &>/dev/null; then
     echo "  gh already installed, skipping."
 elif is_macos; then
@@ -54,14 +81,31 @@ elif is_fedora || is_rhel; then
         sudo dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo 2>/dev/null || true
     sudo dnf install -y gh
 elif is_arch; then
-    sudo pacman -Sy --noconfirm github-cli
+    sudo pacman -S --needed --noconfirm github-cli
 else
     echo "  Warning: Unsupported OS for GitHub CLI. Attempting install via conda-forge..."
     echo "  Please install gh manually: https://github.com/cli/cli#installation"
 fi
 
-# [3/3] Create convenience symlinks (Debian renames fd-find→fdfind, bat→batcat)
-echo "[3/3] Creating symlinks..."
+# [3/4] Ensure fastfetch is installed (fallback for older Debian/Ubuntu)
+echo "[3/4] Checking fastfetch..."
+if command -v fastfetch &>/dev/null; then
+    echo "  fastfetch $(fastfetch --version 2>/dev/null | awk '{print $2}' || true) installed."
+elif is_debian; then
+    echo "  fastfetch not found in default apt repos, attempting fallback installation..."
+    arch_deb="amd64"
+    [[ "$(uname -m)" == "aarch64" ]] && arch_deb="arm64"
+    ff_deb="/tmp/fastfetch.deb"
+    ff_url="https://github.com/fastfetch-cli/fastfetch/releases/latest/download/fastfetch-linux-${arch_deb}.deb"
+    [[ -n "${GH_PROXY:-}" ]] && ff_url="${GH_PROXY%/}/${ff_url}"
+    if curl -fsSL --retry 2 "$ff_url" -o "$ff_deb" 2>/dev/null; then
+        sudo dpkg -i "$ff_deb" 2>/dev/null || sudo apt-get install -f -y 2>/dev/null || true
+        rm -f "$ff_deb"
+    fi
+fi
+
+# [4/4] Create convenience symlinks (Debian renames fd-find→fdfind, bat→batcat)
+echo "[4/4] Creating symlinks..."
 if is_debian; then
     mkdir -p "$HOME/.local/bin"
     if command -v batcat &>/dev/null && ! command -v bat &>/dev/null; then

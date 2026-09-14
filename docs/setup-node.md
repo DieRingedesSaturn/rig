@@ -60,5 +60,3 @@ nvm works on all supported platforms (Linux and macOS). No OS-specific package m
 ## Post-Install
 
 Run `source ~/.zshrc` or open a new terminal to use `node`, `npm`, and `nvm`.
-
-Note: Other scripts that depend on Node.js (Claude Code, Codex, Gemini, Skills) will automatically load nvm if installed.

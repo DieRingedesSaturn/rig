@@ -18,18 +18,20 @@ The script automatically detects your OS and installs the appropriate packages:
 | build tools | `build-essential` (gcc, g++, make) | `gcc`, `gcc-c++`, `make` | `base-devel` | Xcode Command Line Tools |
 | wget | `wget` | `wget` | `wget` | `wget` |
 | unzip | `unzip` | `unzip` | `unzip` | `unzip` |
-| clipboard | `xclip` | `xclip` | `xclip` | `pbcopy` (built-in) |
+| fastfetch | `fastfetch` | `fastfetch` | `fastfetch` | `fastfetch` |
+| clipboard | `wl-clipboard` (Wayland) or `xclip` (X11) | same | same | `pbcopy` (built-in) |
 
 **Notes:**
 - On Debian/Ubuntu, `fd-find` and `bat` are symlinked to `fd` and `bat` in `~/.local/bin/`
 - On macOS, Xcode Command Line Tools are installed automatically if not present
-- macOS uses `pbcopy`/`pbpaste` built-in commands instead of `xclip`
+- macOS uses the built-in `pbcopy`/`pbpaste` instead of an external helper
+- The clipboard helper is **chosen by session detection**, not hardcoded: Wayland gets `wl-clipboard`, X11 gets `xclip`, a headless server gets neither (there is no display server to talk to), and macOS uses what it already has. See [Clipboard helper](#clipboard-helper).
 
 ## What Gets Installed
 
 | Binary | Purpose |
 |--------|---------|
-| `rg` | Fast code search (used internally by Claude Code) |
+| `rg` | Fast code search |
 | `jq` | JSON processing |
 | `fd` | Fast file finder |
 | `bat` | Syntax-highlighted cat |
@@ -39,6 +41,7 @@ The script automatically detects your OS and installs the appropriate packages:
 | `gcc`, `g++`, `make` | Native npm module compilation |
 | `wget` | HTTP downloads |
 | `unzip` | Archive extraction |
+| `fastfetch` | Fast, lightweight system information display |
 
 ## How It Works
 
@@ -93,10 +96,36 @@ None required. The script uses only system apt repositories and GitHub's officia
 | `/etc/apt/keyrings/githubcli-archive-keyring.gpg` | GitHub CLI apt signing key |
 | `/etc/apt/sources.list.d/github-cli.list` | GitHub CLI apt repository |
 
+## Clipboard helper
+
+`xclip` is an X11 program: on Wayland or on a headless server it does nothing. Installing it unconditionally, or expecting it in status output, produces a permanent false gap on machines that are in fact correctly provisioned. So the helper is derived from the session:
+
+| Session | Helper | Package |
+|---------|--------|---------|
+| macOS | `pbcopy` | built in |
+| Wayland (`WAYLAND_DISPLAY` set) | `wl-copy` | `wl-clipboard` |
+| X11 (`DISPLAY` set, no Wayland) | `xclip` | `xclip` |
+| Headless — no display server | none | none installed |
+
+Wayland is checked **before** X11, because a Wayland session usually still exports `DISPLAY` for XWayland; checking `DISPLAY` first would pick `xclip` on a Wayland desktop.
+
+Override it for an unusual setup:
+
+```bash
+RIG_CLIPBOARD_TOOL=auto      # default: detect
+RIG_CLIPBOARD_TOOL=xclip     # force
+RIG_CLIPBOARD_TOOL=none      # never install one
+```
+
+`status.sh` uses the same detection, so it only ever expects the helper that applies to the current session.
+
 ## Post-Install
 
 Verify all tools are available:
 
 ```bash
-command -v rg jq fd bat tree gh shellcheck gcc wget unzip xclip
+command -v rg jq fd bat tree gh shellcheck gcc wget unzip
+# plus your session's clipboard helper, if any:
+command -v wl-copy   # Wayland
+command -v xclip     # X11
 ```

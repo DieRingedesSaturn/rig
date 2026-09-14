@@ -60,5 +60,3 @@ nvm 适用于所有支持的平台（Linux 和 macOS）。无需操作系统特�
 ## 安装后
 
 运行 `source ~/.zshrc` 或打开新终端即可使用 `node`、`npm` 和 `nvm`。
-
-注意：依赖 Node.js 的脚本（Claude Code、Codex、Gemini、Skills）会在需要时自动加载 nvm。

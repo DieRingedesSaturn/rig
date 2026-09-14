@@ -3,7 +3,7 @@ set -euo pipefail
 
 # =============================================================================
 # Package Manager Abstraction Library
-# https://github.com/X-Zero-L/rig
+# https://github.com/DieRingedesSaturn/rig
 #
 # Provides a unified interface for package operations across different
 # OS families and package managers (apt, dnf, yum, pacman, brew).
@@ -109,7 +109,7 @@ pkg_install() {
             _sudo_if_needed yum install -y $mapped
             ;;
         pacman)
-            _sudo_if_needed pacman -Sy --noconfirm $mapped
+            _sudo_if_needed pacman -S --needed --noconfirm $mapped
             ;;
         brew)
             # Homebrew should not run as root
@@ -175,7 +175,7 @@ pkg_update() {
                 _sudo_if_needed yum update -y $mapped
                 ;;
             pacman)
-                _sudo_if_needed pacman -Sy --noconfirm $mapped
+                _sudo_if_needed pacman -S --noconfirm $mapped
                 ;;
             brew)
                 brew upgrade $mapped
