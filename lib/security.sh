@@ -410,7 +410,7 @@ security_audit_listening_ports() {
 
     # Load firewall helper if needed
     local lib_dir
-    lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
     if ! command -v firewall_is_active >/dev/null 2>&1; then
         if [[ -f "$lib_dir/firewall.sh" ]]; then
             # shellcheck source=lib/firewall.sh

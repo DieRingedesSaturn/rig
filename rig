@@ -23,7 +23,7 @@ set -euo pipefail
 # =============================================================================
 
 VERSION="0.1.0"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
 # On-disk copy of the repo scripts. Populated on every successful download so
 # an installed rig keeps working when GitHub (or the configured proxy) is

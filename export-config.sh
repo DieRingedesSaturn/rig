@@ -22,21 +22,22 @@ set -euo pipefail
 # --- OS Detection ------------------------------------------------------------
 
 # Source OS detection library if available
-if [[ -f "${BASH_SOURCE[0]%/*}/lib/os-detect.sh" ]]; then
+_EXP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+if [[ -f "$_EXP_DIR/lib/os-detect.sh" ]]; then
     # shellcheck disable=SC1091
-    source "${BASH_SOURCE[0]%/*}/lib/os-detect.sh"
+    source "$_EXP_DIR/lib/os-detect.sh"
 else
     # Minimal fallback
     is_macos() { [[ "$(uname -s)" == "Darwin" ]]; }
 fi
 
-if [[ -f "${BASH_SOURCE[0]%/*}/lib/rig-config.sh" ]]; then
+if [[ -f "$_EXP_DIR/lib/rig-config.sh" ]]; then
     # shellcheck disable=SC1091
-    source "${BASH_SOURCE[0]%/*}/lib/rig-config.sh"
+    source "$_EXP_DIR/lib/rig-config.sh"
 fi
-if [[ -f "${BASH_SOURCE[0]%/*}/lib/backup.sh" ]]; then
+if [[ -f "$_EXP_DIR/lib/backup.sh" ]]; then
     # shellcheck disable=SC1091
-    source "${BASH_SOURCE[0]%/*}/lib/backup.sh"
+    source "$_EXP_DIR/lib/backup.sh"
 fi
 
 # --- Options -----------------------------------------------------------------

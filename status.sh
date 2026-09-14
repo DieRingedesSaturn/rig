@@ -11,7 +11,7 @@ set -euo pipefail
 # =============================================================================
 
 # --- Load OS detection libraries ---------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # shellcheck source=lib/os-detect.sh
 source "$SCRIPT_DIR/lib/os-detect.sh"
 # shellcheck source=lib/pkg-maps.sh

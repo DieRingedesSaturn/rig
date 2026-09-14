@@ -48,7 +48,7 @@ CURSOR_HIDDEN=0
 # --- [A1] OS Detection -------------------------------------------------------
 
 # Source OS detection library if available locally, otherwise download
-_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 if [[ -n "$_SCRIPT_DIR" && -f "${_SCRIPT_DIR}/lib/os-detect.sh" ]]; then
     # shellcheck disable=SC1091
     source "${_SCRIPT_DIR}/lib/os-detect.sh"
