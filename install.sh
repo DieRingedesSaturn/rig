@@ -920,7 +920,7 @@ run_component() {
         # Components that may ask questions must run in the foreground — under
         # `curl | bash` stdin is a pipe, so -t 0 cannot detect interactivity.
         case "${COMP_IDS[$idx]}" in
-            git|tmux|containers|security) needs_visible_tty=1 ;;
+            shell|git|neovim|tmux|containers|security) needs_visible_tty=1 ;;
         esac
     fi
 
@@ -1145,12 +1145,18 @@ install_rig_cli() {
 
     printf "  ${SYM_CHECK} ${GREEN}Installed rig CLI to ${CYAN}%s${NC}\n" "$dest"
 
-    # Warn if ~/.local/bin is not in PATH
+    # Warn if ~/.local/bin is not in PATH — and, when sudo is available, also
+    # link into /usr/local/bin so `rig` resolves immediately without rc edits.
     case ":${PATH}:" in
         *":$HOME/.local/bin:"*) ;;
         *)
-            printf "  ${SYM_WARN} ${YELLOW}%s is not in your PATH${NC}\n" "$HOME/.local/bin"
-            printf "  ${DIM}Add to your shell profile:${NC} ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}\n"
+            if sudo -n true 2>/dev/null && [[ -d /usr/local/bin ]]; then
+                sudo ln -sf "$dest" /usr/local/bin/rig
+                printf "  ${SYM_CHECK} ${GREEN}Also linked ${CYAN}/usr/local/bin/rig${NC} ${DIM}(already on PATH)${NC}\n"
+            else
+                printf "  ${SYM_WARN} ${YELLOW}%s is not in your PATH${NC}\n" "$HOME/.local/bin"
+                printf "  ${DIM}Add to your shell profile:${NC} ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}\n"
+            fi
             ;;
     esac
 }

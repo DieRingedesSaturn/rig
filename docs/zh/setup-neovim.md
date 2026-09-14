@@ -2,7 +2,7 @@
 
 安装 Neovim（确保 >= 0.9）并写入零依赖、面向终端原生配色的 `init.lua`。在可用时通过 `update-alternatives` 设置默认编辑器。
 
-**不可协商契约：** `~/.config/nvim/init.lua` 仅在缺失时创建——已有配置绝不覆盖。
+**不可协商契约：** `~/.config/nvim/init.lua` 缺失时创建；已有配置仅在交互确认（保留/覆盖/追加/看 diff）后才可替换，且先自动备份——绝不静默覆盖。
 
 ## 安装内容
 
@@ -17,7 +17,7 @@
 |------|------|
 | 系统编辑器 | `update-alternatives --set editor/vi` → nvim（nvim 位于 `$HOME` 下或 sudo 不可用时跳过） |
 | rc 文件 | **绝不修改**——若 `~/.zshrc`/`~/.bashrc` 缺 `EDITOR="nvim"`，仅打印建议导出项 |
-| `init.lua` | 仅在缺失时写入 |
+| `init.lua` | 缺失时写入；已存在则展示 diff 并提供 保留/覆盖/追加 菜单 |
 
 ## 默认 init.lua 要点
 
@@ -31,7 +31,7 @@
 
 | 文件 | 操作 |
 |------|------|
-| `~/.config/nvim/init.lua` | 仅缺失时创建；绝不覆盖 |
+| `~/.config/nvim/init.lua` | 缺失时创建；已有配置弹出 diff 菜单，覆盖/追加前自动备份到 `~/.local/share/rig/backups/user/` |
 | `~/.local/bin/nvim` | 软链，仅静态包兜底路径 |
 | `~/.local/share/nvim-static/` | 静态包内容，仅兜底路径 |
 | `/usr/bin/editor`、`/usr/bin/vi` | `update-alternatives` 目标（适用时） |

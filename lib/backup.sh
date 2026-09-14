@@ -72,3 +72,83 @@ rig_system_latest_backup() {
     [[ -n "$latest" ]] || return 1
     printf '%s\n' "$latest"
 }
+
+# rig_config_diff OLD NEW - Show a colorized unified diff of two config files.
+rig_config_diff() {
+    local old_file="$1" new_file="$2"
+    echo ""
+    echo "─── Configuration Diff (- existing / + recommended) ───"
+    if command -v git >/dev/null 2>&1; then
+        git diff --no-index --color=always "$old_file" "$new_file" || true
+    elif diff --help 2>&1 | grep -q -- '--color'; then
+        diff -u --color=always "$old_file" "$new_file" || true
+    else
+        diff -u "$old_file" "$new_file" || true
+    fi
+    echo "───────────────────────────────────────────────────────"
+}
+
+# rig_offer_config_baseline TARGET BASELINE_FILE TAG
+# Shared "existing config vs recommended baseline" decision flow: when TARGET
+# differs, show the diff and — whenever a controlling terminal exists (this
+# also works under `curl | bash` via /dev/tty) — offer keep / overwrite /
+# append / diff. Overwrite and append take a timestamped backup first.
+# Non-interactive runs and "keep" leave TARGET untouched.
+rig_offer_config_baseline() {
+    local target="$1" baseline="$2" tag="${3:-config}" choice backup
+    [[ -f "$target" && -f "$baseline" ]] || return 0
+    if cmp -s "$target" "$baseline"; then
+        echo "  ✔ $target already matches the recommended baseline."
+        return 0
+    fi
+
+    echo ""
+    echo "  Notice: $target differs from the recommended baseline."
+    rig_config_diff "$target" "$baseline"
+
+    if ! rig_can_prompt; then
+        echo "  Non-interactive terminal: keeping existing $target untouched (default)."
+        return 0
+    fi
+
+    echo ""
+    echo "How would you like to handle your existing $target?"
+    echo "  [k] Keep existing configuration unchanged (default / safe)"
+    echo "  [o] Overwrite with recommended baseline (creates a Rig backup)"
+    echo "  [a] Append recommended baseline settings to end of file"
+    echo "  [d] Show diff again"
+    while true; do
+        read -r -p "Choice [K/o/a/d]: " choice </dev/tty || choice="k"
+        choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
+        case "$choice" in
+            o|overwrite)
+                backup="$(rig_user_backup "$target" "$tag")"
+                cat "$baseline" > "$target"
+                echo "  ✔ Backed up existing config to: $backup"
+                echo "  ✔ Overwrote $target with recommended baseline."
+                return 0
+                ;;
+            a|append)
+                backup="$(rig_user_backup "$target" "$tag")"
+                {
+                    echo ""
+                    echo "# --- Appended by rig on $(date '+%Y-%m-%d %H:%M:%S') ---"
+                    cat "$baseline"
+                } >> "$target"
+                echo "  ✔ Backed up existing config to: $backup"
+                echo "  ✔ Appended baseline settings to $target."
+                return 0
+                ;;
+            d|diff)
+                rig_config_diff "$target" "$baseline"
+                ;;
+            ""|k|keep)
+                echo "  Keeping existing $target untouched."
+                return 0
+                ;;
+            *)
+                echo "  Invalid choice: please enter k, o, a, or d."
+                ;;
+        esac
+    done
+}

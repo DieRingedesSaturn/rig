@@ -9,7 +9,9 @@ set -euo pipefail
 # alias vim=nvim, and writes a dependency-free, high-performance init.lua.
 #
 # Non-negotiable contract:
-#   ~/.config/nvim/init.lua   created only when absent, never overwritten
+#   ~/.config/nvim/init.lua   created when absent; an existing file is only
+#                             replaced after explicit interactive confirmation
+#                             plus a timestamped backup (never silently)
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -19,6 +21,8 @@ source "$SCRIPT_DIR/lib/os-detect.sh"
 source "$SCRIPT_DIR/lib/pkg-maps.sh"
 # shellcheck source=lib/pkg-manager.sh
 source "$SCRIPT_DIR/lib/pkg-manager.sh"
+# shellcheck source=lib/backup.sh
+source "$SCRIPT_DIR/lib/backup.sh"
 
 NVIM_CONFIG_DIR="$HOME/.config/nvim"
 NVIM_INIT_LUA="$NVIM_CONFIG_DIR/init.lua"
@@ -109,11 +113,8 @@ done
 echo ""
 echo "[3/4] Neovim configuration..."
 
-if [[ -f "$NVIM_INIT_LUA" ]]; then
-    echo "  keeping existing $NVIM_INIT_LUA (left untouched)"
-else
-    mkdir -p "$NVIM_CONFIG_DIR"
-    cat > "$NVIM_INIT_LUA" <<'EOF'
+TMP_INIT_LUA="$(mktemp)"
+cat > "$TMP_INIT_LUA" <<'EOF'
 -- Rig Neovim Baseline
 -- Lightweight terminal-native Neovim configuration.
 
@@ -296,8 +297,15 @@ end
 -- Let Ghostty/Konsole own mouse selection and copy-on-select.
 vim.opt.mouse = ''
 EOF
+
+if [[ -f "$NVIM_INIT_LUA" ]]; then
+    rig_offer_config_baseline "$NVIM_INIT_LUA" "$TMP_INIT_LUA" neovim
+else
+    mkdir -p "$NVIM_CONFIG_DIR"
+    cat "$TMP_INIT_LUA" > "$NVIM_INIT_LUA"
     echo "  created modern $NVIM_INIT_LUA (Everforest ANSI palette + OSC 52 clipboard)"
 fi
+rm -f "$TMP_INIT_LUA"
 
 # --- [4/4] Summary -----------------------------------------------------------
 echo ""

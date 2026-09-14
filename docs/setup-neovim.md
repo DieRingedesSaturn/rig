@@ -2,7 +2,7 @@
 
 Installs Neovim (ensuring >= 0.9) and writes a dependency-free, terminal-native `init.lua`. Sets the default editor via `update-alternatives` where available.
 
-**Non-negotiable contract:** `~/.config/nvim/init.lua` is created only when absent — an existing config is never overwritten.
+**Non-negotiable contract:** `~/.config/nvim/init.lua` is created when absent; an existing config is only replaced after an explicit interactive choice (keep/overwrite/append/diff) with a timestamped backup — never silently.
 
 ## What Gets Installed
 
@@ -17,7 +17,7 @@ Installs Neovim (ensuring >= 0.9) and writes a dependency-free, terminal-native 
 |------|-------------|
 | System editor | `update-alternatives --set editor/vi` → nvim (skipped when nvim lives under `$HOME` or sudo is unavailable) |
 | rc files | **Never modified** — if `EDITOR="nvim"` is missing from `~/.zshrc`/`~/.bashrc`, the suggested exports are only printed |
-| `init.lua` | Written only when absent |
+| `init.lua` | Written when absent; existing file triggers a diff + keep/overwrite/append prompt |
 
 ## Default init.lua Highlights
 
@@ -31,7 +31,7 @@ Installs Neovim (ensuring >= 0.9) and writes a dependency-free, terminal-native 
 
 | File | Action |
 |------|--------|
-| `~/.config/nvim/init.lua` | Created only when absent; never overwritten |
+| `~/.config/nvim/init.lua` | Created when absent; existing config shows a diff menu — overwrite/append both take a backup to `~/.local/share/rig/backups/user/` first |
 | `~/.local/bin/nvim` | Symlink, only via the static-binary fallback |
 | `~/.local/share/nvim-static/` | Static binary payload, fallback only |
 | `/usr/bin/editor`, `/usr/bin/vi` | `update-alternatives` targets (when applicable) |

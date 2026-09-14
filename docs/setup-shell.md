@@ -4,12 +4,12 @@ Installs zsh, Starship, and the zsh-autosuggestions + zsh-syntax-highlighting pl
 
 ## Design Contract
 
-This component is non-destructive by construction. It never overwrites a file it did not create itself:
+This component is non-destructive by construction. Nothing is ever overwritten silently:
 
 | Path | Behaviour |
 |------|-----------|
 | `~/.zshrc` | **Read-only, always.** Never created, never appended to, never backed up, never restored. |
-| `~/.config/starship.toml` | Created **only when absent**. An existing config is never overwritten — not even to apply a preset. |
+| `~/.config/starship.toml` | Created when absent. An existing config triggers a diff + keep/overwrite/append prompt; overwrite/append take a timestamped backup first. |
 | Default login shell | **Reported, never changed.** No `chsh` is ever run. |
 | Packages | Installed via the distro package manager only. The sole exception is the Starship fallback below. |
 
@@ -44,7 +44,7 @@ Package names are resolved through `lib/pkg-maps.sh`, so the same abstract names
 | 1/5 | Install `zsh` and `curl` (skipped on macOS, where both are built in). Then best-effort install `starship`, `zsh-autosuggestions`, `zsh-syntax-highlighting`; a package the distro does not ship is reported, not fatal |
 | 2/5 | Ensure Starship exists. If the package manager could not provide it, run the upstream installer into `~/.local/bin` |
 | 3/5 | Probe for the plugin files. Package managers disagree about where they land, so a candidate list is searched rather than one path hardcoded |
-| 4/5 | Create `~/.config/starship.toml` **only if missing** |
+| 4/5 | Create `~/.config/starship.toml` when missing; existing files get the diff + keep/overwrite/append menu |
 | 5/5 | Read `~/.zshrc` and report: which plugins it loads, whether the Starship init line is present, whether zsh is the login shell, and any line-order advisory |
 
 ## Plugin Locations Probed
@@ -59,7 +59,7 @@ Package names are resolved through `lib/pkg-maps.sh`, so the same abstract names
 
 | File | Action |
 |------|--------|
-| `~/.config/starship.toml` | Created only when absent; default prompt shows path, git state, language runtimes and time — plus a red `ssh:<hostname>` prefix inside SSH sessions |
+| `~/.config/starship.toml` | Created when absent (existing files get the diff menu); default prompt shows path, git state, language runtimes and time — plus a red `ssh:<hostname>` prefix inside SSH sessions |
 | `~/.zshrc` | **Never touched** |
 | `/etc/passwd` | **Never touched** |
 

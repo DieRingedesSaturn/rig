@@ -9,16 +9,16 @@ set -euo pipefail
 # package manager. No Oh My Zsh, no framework, no git clones, no curl|sh for
 # anything the distro already packages.
 #
-# Non-negotiable contract — this script never overwrites a file it did not
-# create itself:
+# Non-negotiable contract — nothing is ever overwritten silently:
 #
 #   ~/.zshrc                  read-only, always
-#   ~/.config/starship.toml   created only when absent
+#   ~/.config/starship.toml   created when absent; an existing file is only
+#                             replaced after explicit interactive confirmation
+#                             plus a timestamped backup
 #   default login shell       reported, never changed
 #
-# Everything already on disk is treated as yours and left alone. Anything the
-# script cannot do without editing your files is printed as a checklist at the
-# end instead of being done behind your back.
+# Anything the script cannot do without editing your files is printed as a
+# checklist at the end instead of being done behind your back.
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,6 +28,8 @@ source "$SCRIPT_DIR/lib/os-detect.sh"
 source "$SCRIPT_DIR/lib/pkg-maps.sh"
 # shellcheck source=lib/pkg-manager.sh
 source "$SCRIPT_DIR/lib/pkg-manager.sh"
+# shellcheck source=lib/backup.sh
+source "$SCRIPT_DIR/lib/backup.sh"
 
 ZSHRC="$HOME/.zshrc"
 STARSHIP_TOML="$HOME/.config/starship.toml"
@@ -150,16 +152,13 @@ fi
 
 # --- [4/5] Starship configuration -------------------------------------------
 
-# Created only when absent. An existing config is yours — it is never
-# overwritten, not even to "upgrade" it to a preset.
+# Created when absent. An existing config is yours — it is only replaced after
+# an explicit interactive choice (keep/overwrite/append), with a backup first.
 
 echo ""
 echo "[4/5] Starship configuration..."
-if [[ -f "$STARSHIP_TOML" ]]; then
-    echo "  keeping existing $STARSHIP_TOML (left untouched)"
-else
-    mkdir -p "$(dirname "$STARSHIP_TOML")"
-    cat > "$STARSHIP_TOML" <<'EOF'
+TMP_STARSHIP="$(mktemp)"
+cat > "$TMP_STARSHIP" <<'EOF'
 # Starship configuration — reference: https://starship.rs/config/
 
 format = """
@@ -201,8 +200,15 @@ format = "[$symbol($version )]($style)"
 symbol = "⬢ "
 style = "bold green"
 EOF
+
+if [[ -f "$STARSHIP_TOML" ]]; then
+    rig_offer_config_baseline "$STARSHIP_TOML" "$TMP_STARSHIP" starship
+else
+    mkdir -p "$(dirname "$STARSHIP_TOML")"
+    cat "$TMP_STARSHIP" > "$STARSHIP_TOML"
     echo "  created default $STARSHIP_TOML"
 fi
+rm -f "$TMP_STARSHIP"
 
 # --- [5/5] Read-only check of your shell configuration ----------------------
 
