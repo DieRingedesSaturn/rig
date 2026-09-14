@@ -75,6 +75,14 @@ _security_group_in_list() {
     return 1
 }
 
+# _security_verify_fail - Report which anti-lockout check refused the user.
+# Diagnostics go to stderr so callers can still use the function in tests and
+# command substitution without swallowing the reason.
+_security_verify_fail() {
+    printf '  anti-lockout check failed: %s\n' "$1" >&2
+    return 1
+}
+
 # security_verify_admin_user - Check if a non-root admin user is valid for login
 # Arguments: username
 # Returns: 0 if valid and has sudo + key, 1 otherwise
@@ -82,14 +90,16 @@ security_verify_admin_user() {
     local user="$1"
 
     if [[ -z "$user" || "$user" == "root" ]]; then
+        _security_verify_fail "admin user is empty or root"
         return 1
     fi
     case "$user" in
-        *[!A-Za-z0-9_.-]*|[0-9.-]*) return 1 ;;
+        *[!A-Za-z0-9_.-]*|[0-9.-]*) _security_verify_fail "invalid username '$user'"; return 1 ;;
     esac
 
     # 1. User exists
     if ! id "$user" >/dev/null 2>&1; then
+        _security_verify_fail "user '$user' does not exist"
         return 1
     fi
 
@@ -105,6 +115,7 @@ security_verify_admin_user() {
         user_shell="$(awk -F: -v user="$user" '$1 == user { print $7; exit }' /etc/passwd 2>/dev/null || true)"
     fi
     if [[ "$user_shell" =~ (nologin|false)$ ]]; then
+        _security_verify_fail "user '$user' has non-login shell '$user_shell'"
         return 1
     fi
 
@@ -112,6 +123,7 @@ security_verify_admin_user() {
     local user_groups
     user_groups="$(id -Gn "$user" 2>/dev/null || true)"
     if ! echo "$user_groups" | grep -qwE '(sudo|wheel|admin)'; then
+        _security_verify_fail "user '$user' is not in sudo/wheel/admin (groups: ${user_groups:-none})"
         return 1
     fi
 
@@ -120,6 +132,7 @@ security_verify_admin_user() {
     # nothing would pass the group check and still be unable to elevate.
     if [[ "$(id -u 2>/dev/null || true)" == "0" ]] && command -v sudo >/dev/null 2>&1; then
         if ! sudo -n -l -U "$user" >/dev/null 2>&1; then
+            _security_verify_fail "sudo -l reports no privileges for '$user' (sudoers does not grant sudo)"
             return 1
         fi
     fi
@@ -137,7 +150,10 @@ security_verify_admin_user() {
     if [[ -z "$home_dir" && -f /etc/passwd ]]; then
         home_dir="$(awk -F: -v user="$user" '$1 == user { print $6; exit }' /etc/passwd 2>/dev/null || true)"
     fi
-    [[ -n "$home_dir" && -d "$home_dir" ]] || return 1
+    if [[ -z "$home_dir" || ! -d "$home_dir" ]]; then
+        _security_verify_fail "user '$user' has no home directory"
+        return 1
+    fi
     ssh_dir="$home_dir/.ssh"
 
     local auth_keys="" akf_list tok expanded
@@ -154,7 +170,10 @@ security_verify_admin_user() {
             break
         fi
     done
-    [[ -n "$auth_keys" ]] || return 1
+    if [[ -z "$auth_keys" ]]; then
+        _security_verify_fail "no non-empty authorized-keys file for '$user' (sshd AuthorizedKeysFile: $akf_list)"
+        return 1
+    fi
 
     # 5. StrictModes checks: the home dir, ~/.ssh (when in use) and the keys
     # file itself must not be writable by group/other, and the keys file must
@@ -163,27 +182,32 @@ security_verify_admin_user() {
         local perm
         perm="$(_security_mode_of "$home_dir")"
         if _security_perm_writeable "$perm"; then
+            _security_verify_fail "home directory $home_dir is group/other-writable (mode $perm) — StrictModes would reject it"
             return 1
         fi
         if [[ -d "$ssh_dir" ]]; then
             perm="$(_security_mode_of "$ssh_dir")"
             if _security_perm_writeable "$perm"; then
+                _security_verify_fail "$ssh_dir is group/other-writable (mode $perm) — StrictModes would reject it"
                 return 1
             fi
         fi
         perm="$(_security_mode_of "$auth_keys")"
         if _security_perm_writeable "$perm"; then
+            _security_verify_fail "$auth_keys is group/other-writable (mode $perm) — StrictModes would reject it"
             return 1
         fi
         local owner
         owner="$(_security_owner_of "$auth_keys")"
         if [[ -n "$owner" && "$owner" != "$user" && "$owner" != "root" ]]; then
+            _security_verify_fail "$auth_keys is owned by '$owner', not '$user' or root"
             return 1
         fi
     fi
 
     # Ensure file contains actual public key patterns
     if ! grep -qE '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-|sk-)' "$auth_keys" 2>/dev/null; then
+        _security_verify_fail "$auth_keys contains no recognizable public key"
         return 1
     fi
 
@@ -192,6 +216,7 @@ security_verify_admin_user() {
     pubkey_cfg="$(security_get_sshd_param PubkeyAuthentication "unknown")"
     pubkey_cfg="$(printf '%s' "$pubkey_cfg" | tr '[:upper:]' '[:lower:]')"
     if [[ "$pubkey_cfg" != "yes" ]]; then
+        _security_verify_fail "effective PubkeyAuthentication is '$pubkey_cfg', not 'yes'"
         return 1
     fi
 
@@ -203,15 +228,19 @@ security_verify_admin_user() {
     allowgroups="$(security_get_sshd_param AllowGroups "")"
     denygroups="$(security_get_sshd_param DenyGroups "")"
     if [[ -n "$denyusers" ]] && _security_user_in_list "$user" "$denyusers"; then
+        _security_verify_fail "user '$user' matches DenyUsers ($denyusers)"
         return 1
     fi
     if [[ -n "$allowusers" ]] && ! _security_user_in_list "$user" "$allowusers"; then
+        _security_verify_fail "user '$user' is not in AllowUsers ($allowusers)"
         return 1
     fi
     if [[ -n "$denygroups" ]] && _security_group_in_list "$user_groups" "$denygroups"; then
+        _security_verify_fail "a group of '$user' matches DenyGroups ($denygroups)"
         return 1
     fi
     if [[ -n "$allowgroups" ]] && ! _security_group_in_list "$user_groups" "$allowgroups"; then
+        _security_verify_fail "no group of '$user' is in AllowGroups ($allowgroups)"
         return 1
     fi
 
@@ -224,6 +253,7 @@ security_verify_admin_user() {
             usepam="$(security_get_sshd_param UsePAM "unknown")"
             usepam="$(printf '%s' "$usepam" | tr '[:upper:]' '[:lower:]')"
             if [[ "$usepam" != "yes" ]]; then
+                _security_verify_fail "account '$user' is locked (shadow '!') and UsePAM is not 'yes'"
                 return 1
             fi
         fi
