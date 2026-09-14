@@ -377,6 +377,12 @@ security_get_sshd_param() {
     fi
 
     if [[ -n "$sshd_bin" ]]; then
+        # sshd -T needs the privilege-separation dir; it is missing on minimal
+        # Debian-family installs, which would silently turn every lookup into
+        # the default value.
+        if [[ "$(uname -s 2>/dev/null)" == "Linux" && ! -d /run/sshd ]]; then
+            sudo mkdir -p /run/sshd 2>/dev/null || mkdir -p /run/sshd 2>/dev/null || true
+        fi
         local t_val=""
         t_val="$("$sshd_bin" -T 2>/dev/null | grep -i "^${param} " | head -1 | awk '{print $2}' || true)"
         if [[ -z "$t_val" ]] && sudo -n true 2>/dev/null; then

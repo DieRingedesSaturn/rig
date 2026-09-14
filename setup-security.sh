@@ -204,10 +204,11 @@ if [[ $LOCKOUT_RISK -eq 1 ]]; then
     fi
 
     if ! security_verify_admin_user "$RIG_ADMIN_USER"; then
-        printf "  ${RED}FATAL: Anti-lockout guard blocked hardening!${NC}\n" >&2
-        echo "  User '$RIG_ADMIN_USER' either does not exist, lacks sudo privileges, or" >&2
-        echo "  has no valid SSH public keys in an authorized-keys file sshd accepts." >&2
-        echo "  Refusing to disable root SSH login or password authentication." >&2
+        printf "  ${RED}FATAL: Anti-lockout guard blocked hardening.${NC}\n" >&2
+        echo "  The specific failing check is printed above. Until it is fixed, disabling" >&2
+        echo "  root login or password auth could lock you out — refusing to proceed." >&2
+        echo "  Common fixes: add '$RIG_ADMIN_USER' to the sudo/wheel group, install a" >&2
+        echo "  public key into its authorized_keys, or fix permissions on ~ and ~/.ssh." >&2
         exit 1
     fi
     printf "  ${GREEN}✔ Anti-lockout check passed:${NC} Admin user '%s' verified (sudo + SSH key active).\n" "$RIG_ADMIN_USER"
