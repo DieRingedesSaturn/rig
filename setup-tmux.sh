@@ -202,7 +202,7 @@ if [[ -n "$EXISTING_CONF" ]]; then
         echo "  Notice: $EXISTING_CONF differs from the recommended baseline."
         show_diff "$EXISTING_CONF" "$TMP_BASELINE"
 
-        if [[ -t 0 ]]; then
+        if rig_can_prompt; then
             echo ""
             echo "How would you like to handle your existing $EXISTING_CONF?"
             echo "  [k] Keep existing configuration unchanged (default / safe)"
@@ -210,7 +210,7 @@ if [[ -n "$EXISTING_CONF" ]]; then
             echo "  [a] Append recommended baseline settings to end of file"
             echo "  [d] Show diff again"
             while true; do
-                read -r -p "Choice [K/o/a/d]: " choice || choice="k"
+                read -r -p "Choice [K/o/a/d]: " choice </dev/tty || choice="k"
                 choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
                 case "$choice" in
                     o|overwrite)

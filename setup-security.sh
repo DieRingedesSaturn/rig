@@ -101,8 +101,9 @@ csv_has_port() {
     return 1
 }
 
-# Interactive prompt if running in interactive terminal
-if [[ -t 0 ]] && [[ "${RIG_NON_INTERACTIVE:-0}" -ne 1 ]]; then
+# Interactive prompt whenever a controlling terminal exists — including
+# `curl | bash`, where stdin is a pipe but /dev/tty is still usable.
+if rig_can_prompt && [[ "${RIG_NON_INTERACTIVE:-0}" -ne 1 ]]; then
     PUBLIC_TCP_EXTRAS="$(csv_without_port "$RIG_PUBLIC_TCP" "$RIG_SSH_PORT")"
     printf "\n=== Interactive Security Baseline Configuration ===\n"
     printf "Press Enter to keep the currently resolved value.\n\n"

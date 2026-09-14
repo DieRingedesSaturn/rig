@@ -54,7 +54,7 @@ command -v docker >/dev/null 2>&1 && have_docker=1
 
 # When auto detection is ambiguous, let an interactive user make the actual
 # either/or decision. A sole existing engine was already selected above.
-if [[ "$SOURCE" != "config" && -t 0 ]] && \
+if [[ "$SOURCE" != "config" ]] && rig_can_prompt && \
    { [[ "$have_podman" -eq 0 && "$have_docker" -eq 0 ]] || \
      [[ "$have_podman" -eq 1 && "$have_docker" -eq 1 ]]; }; then
     echo "Container engine (Podman and Docker are alternatives):"
@@ -72,7 +72,7 @@ fi
 # Docker rootless cannot work without a usable user systemd session. Make the
 # fallback a user decision; never silently switch security models.
 if [[ "$ENGINE" == "docker" && "$MODE" == "rootless" ]] && ! containers_have_user_systemd; then
-    if [[ -t 0 ]]; then
+    if rig_can_prompt; then
         echo ""
         echo "Docker rootless needs a working systemd user session, which is unavailable."
         if [[ "$have_podman" -eq 1 ]]; then

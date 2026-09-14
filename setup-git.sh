@@ -28,6 +28,17 @@ fi
 
 echo "=== Git Setup ==="
 
+# When a terminal is available and nothing is configured yet, ask instead of
+# silently skipping — a git without user.name/user.email cannot commit.
+if rig_can_prompt; then
+    if [[ -z "$GIT_USER_NAME" ]] && [[ -z "$(git config --global user.name 2>/dev/null)" ]]; then
+        read -rp "  git user.name (blank to skip): " GIT_USER_NAME </dev/tty || GIT_USER_NAME=""
+    fi
+    if [[ -z "$GIT_USER_EMAIL" ]] && [[ -z "$(git config --global user.email 2>/dev/null)" ]]; then
+        read -rp "  git user.email (blank to skip): " GIT_USER_EMAIL </dev/tty || GIT_USER_EMAIL=""
+    fi
+fi
+
 # [1/2] Configure user
 echo "[1/2] Configuring user..."
 if [ -n "$GIT_USER_NAME" ]; then

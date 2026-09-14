@@ -141,7 +141,7 @@ COMP_NAMES=(
 )
 
 COMP_DESCS=(
-    "zsh + Starship, no Oh My Zsh"
+    "zsh + Starship prompt + zsh plugins"
     "tmux + mouse, large scrollback"
     "user.name + user.email + defaults"
     "rg, jq, fd, bat, gh, build tools"
@@ -206,11 +206,11 @@ PRESET_COMPS=(
     "shell tmux git tools neovim node uv containers ssh security"
 )
 PRESET_DESCS=(
-    "Shell, tools, git — lightweight baseline"
-    "Shell, tools, git + Neovim + Node.js runtime"
-    "Containers, networking, and SSH"
-    "VPS server baseline with security hardening & firewall"
-    "Complete development environment"
+    "Just the essentials (shell, tools, git)"
+    "Agent-ready host (adds neovim, node)"
+    "Ops host (adds node, containers, tailscale, ssh)"
+    "VPS baseline (adds neovim, containers, tailscale, ssh + security hardening)"
+    "Full dev environment (everything except tailscale)"
 )
 
 # _preset_index <name> - echo the index of a preset by name; returns 1 if not found
@@ -916,9 +916,11 @@ run_component() {
     fi
 
     local needs_visible_tty=0
-    if [[ -t 0 ]]; then
+    if rig_can_prompt; then
+        # Components that may ask questions must run in the foreground — under
+        # `curl | bash` stdin is a pipe, so -t 0 cannot detect interactivity.
         case "${COMP_IDS[$idx]}" in
-            tmux|containers|security) needs_visible_tty=1 ;;
+            git|tmux|containers|security) needs_visible_tty=1 ;;
         esac
     fi
 

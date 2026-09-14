@@ -191,6 +191,14 @@ is_arch() { [[ "$OS_FAMILY" == "arch" ]]; }
 # is_macos - Returns 0 if the current OS is macOS.
 is_macos() { [[ "$OS_FAMILY" == "macos" ]]; }
 
+# rig_can_prompt - True when a controlling terminal can be opened for
+# interactive questions. Under `curl | bash` stdin is a pipe, so `-t 0` is
+# false even though the user sits at a terminal — every interactive prompt in
+# this project reads </dev/tty, so the gate must test that same device.
+rig_can_prompt() {
+    (exec 3<>/dev/tty) 2>/dev/null
+}
+
 # --- Auto-detect on source ---------------------------------------------------
 
 detect_os

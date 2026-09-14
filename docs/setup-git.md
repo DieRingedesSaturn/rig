@@ -27,7 +27,7 @@ Works on all supported platforms. Git is installed via the system package manage
 
 | Step | Action |
 |------|--------|
-| 1/2 | Set `user.name` and `user.email` (if env vars provided) |
+| 1/2 | Set `user.name` and `user.email` — from env vars, or asked interactively when a terminal is present and no value is configured yet (blank answer skips) |
 | 2/2 | Set sensible defaults |
 
 ## Defaults Applied
