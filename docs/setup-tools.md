@@ -18,10 +18,11 @@ The script automatically detects your OS and installs the appropriate packages:
 | build tools | `build-essential` (gcc, g++, make) | `gcc`, `gcc-c++`, `make` | `base-devel` | Xcode Command Line Tools |
 | wget | `wget` | `wget` | `wget` | `wget` |
 | unzip | `unzip` | `unzip` | `unzip` | `unzip` |
-| fastfetch | `fastfetch` | `fastfetch` | `fastfetch` | `fastfetch` |
+| fastfetch | `fastfetch` + upstream fallback | `fastfetch` + upstream fallback | `fastfetch` | `fastfetch` |
 | clipboard | `wl-clipboard` (Wayland) or `xclip` (X11) | same | same | `pbcopy` (built-in) |
 
 **Notes:**
+- `fastfetch` is **optional** and installed separately from the batch — it is absent from older Debian/Ubuntu repos, and one unresolvable package name would fail the whole `apt-get` transaction. See [fastfetch fallback](#fastfetch-fallback).
 - On Debian/Ubuntu, `fd-find` and `bat` are symlinked to `fd` and `bat` in `~/.local/bin/`
 - On macOS, Xcode Command Line Tools are installed automatically if not present
 - macOS uses the built-in `pbcopy`/`pbpaste` instead of an external helper
@@ -118,6 +119,28 @@ RIG_CLIPBOARD_TOOL=none      # never install one
 ```
 
 `status.sh` uses the same detection, so it only ever expects the helper that applies to the current session.
+
+## fastfetch fallback
+
+`fastfetch` is optional. Per the [upstream README](https://github.com/fastfetch-cli/fastfetch), the distro repos only carry it on Arch, Fedora, Alpine, openSUSE, Void, Debian 13+, and Ubuntu 25.04+. When the native repos miss it, the script asks once before reaching for upstream GitHub release assets (third-party binaries need consent):
+
+```
+fastfetch is not in debian's package repositories.
+  Install from the upstream GitHub release (.deb/.rpm via sudo, else tarball into ~/.local/bin)? [y/N]
+```
+
+If confirmed, the first applicable method wins:
+
+| System | Asset | Method |
+|--------|-------|--------|
+| Debian family | `fastfetch-linux-<arch>.deb` | `sudo dpkg -i` (+ `apt-get install -f` for deps) |
+| dnf systems (Fedora/RHEL…) | `fastfetch-linux-<arch>.rpm` | `sudo dnf install` |
+| zypper systems (openSUSE…) | `fastfetch-linux-<arch>.rpm` | `sudo zypper install` |
+| anything else (incl. Alpine → musl asset, macOS, no sudo) | `fastfetch-<os>-<arch>.tar.gz` | extract binary into `~/.local/bin` — **rootless** |
+
+If the installed binary fails to run (glibc too old), the `-polyfilled` build variant is retried automatically. A broken tarball copy left by us is removed again; a pre-existing `~/.local/bin/fastfetch` is never deleted.
+
+Without a TTY nothing is downloaded — the script prints the asset names so you can install manually. `status.sh` does not count fastfetch as a required tool.
 
 ## Post-Install
 

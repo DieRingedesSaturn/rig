@@ -92,25 +92,85 @@ fi
 # [3/4] Ensure fastfetch is installed (optional; not every distro packages it)
 echo "[3/4] Checking fastfetch..."
 if ! command -v fastfetch &>/dev/null; then
-    # Packaged for Arch/Fedora/Alpine/openSUSE/Void and Debian 13+/Ubuntu 25.04+.
-    # Installed alone so an unresolvable name cannot fail the tools batch.
+    # Native repos cover Arch/Fedora/Alpine/openSUSE/Void and Debian 13+/
+    # Ubuntu 25.04+. Installed alone so a missing name cannot fail the batch.
     pkg_install fastfetch 2>/dev/null || true
 fi
-if ! command -v fastfetch &>/dev/null && is_debian; then
-    # Older Debian/Ubuntu: upstream publishes a self-contained .deb.
-    echo "  fastfetch not found in default apt repos, attempting fallback installation..."
-    arch_deb="amd64"
-    [[ "$(uname -m)" == "aarch64" ]] && arch_deb="arm64"
-    ff_deb="$(mktemp /tmp/fastfetch.XXXXXX.deb)"
-    ff_url="https://github.com/fastfetch-cli/fastfetch/releases/latest/download/fastfetch-linux-${arch_deb}.deb"
-    [[ -n "${GH_PROXY:-}" ]] && ff_url="${GH_PROXY%/}/${ff_url}"
-    if curl -fsSL --retry 2 "$ff_url" -o "$ff_deb" 2>/dev/null; then
-        sudo dpkg -i "$ff_deb" 2>/dev/null || sudo apt-get install -f -y 2>/dev/null || true
+
+ff_works() {
+    command -v fastfetch &>/dev/null && fastfetch --version &>/dev/null \
+        || { [[ -x "$HOME/.local/bin/fastfetch" ]] && "$HOME/.local/bin/fastfetch" --version &>/dev/null; }
+}
+
+if ! ff_works; then
+    # Upstream releases ship .deb/.rpm/.tar.gz per arch, plus "-polyfilled"
+    # builds for old glibc and a musl build for Alpine-style systems.
+    ff_arch="$(uname -m)"
+    [[ "$ff_arch" == "x86_64" ]] && ff_arch="amd64"
+    if is_macos; then
+        ff_os="macos"
+    elif ldd --version 2>&1 | grep -qi musl; then
+        ff_os="musl"
+    else
+        ff_os="linux"
     fi
-    rm -f "$ff_deb"
+    ff_base="https://github.com/fastfetch-cli/fastfetch/releases/latest/download"
+    [[ -n "${GH_PROXY:-}" ]] && ff_base="${GH_PROXY%/}/${ff_base}"
+
+    echo "  fastfetch is not in $OS_DISTRO's package repositories."
+    ff_reply="n"
+    if rig_can_prompt; then
+        read -r -p "  Install from the upstream GitHub release (.deb/.rpm via sudo, else tarball into ~/.local/bin)? [y/N] " ff_reply </dev/tty || ff_reply="n"
+    else
+        echo "  Non-interactive: skipping. Manual assets: $ff_base/fastfetch-${ff_os}-${ff_arch}.{deb,rpm,tar.gz}"
+    fi
+
+    if [[ "$ff_reply" =~ ^[Yy] ]]; then
+        ff_tmp="$(mktemp -d)"
+        ff_ours=""
+        for ff_variant in "" "-polyfilled"; do
+            ff_asset="fastfetch-${ff_os}-${ff_arch}${ff_variant}"
+            if is_debian; then
+                if curl -fsSL --retry 2 "$ff_base/${ff_asset}.deb" -o "$ff_tmp/ff.deb" 2>/dev/null \
+                    && { sudo dpkg -i "$ff_tmp/ff.deb" 2>/dev/null \
+                        || sudo apt-get install -f -y 2>/dev/null; }; then
+                    echo "  installed via ${ff_asset}.deb"
+                fi
+            elif command -v dnf &>/dev/null; then
+                if curl -fsSL --retry 2 "$ff_base/${ff_asset}.rpm" -o "$ff_tmp/ff.rpm" 2>/dev/null \
+                    && sudo dnf install -y "$ff_tmp/ff.rpm" 2>/dev/null; then
+                    echo "  installed via ${ff_asset}.rpm"
+                fi
+            elif command -v zypper &>/dev/null; then
+                if curl -fsSL --retry 2 "$ff_base/${ff_asset}.rpm" -o "$ff_tmp/ff.rpm" 2>/dev/null \
+                    && sudo zypper --non-interactive install "$ff_tmp/ff.rpm" 2>/dev/null; then
+                    echo "  installed via ${ff_asset}.rpm"
+                fi
+            fi
+            # Rootless fallback: tarball → ~/.local/bin (no sudo needed)
+            if ! ff_works \
+                && curl -fsSL --retry 2 "$ff_base/${ff_asset}.tar.gz" -o "$ff_tmp/ff.tar.gz" 2>/dev/null; then
+                tar -xzf "$ff_tmp/ff.tar.gz" -C "$ff_tmp" 2>/dev/null || true
+                ff_bin="$(find "$ff_tmp" -type f -name fastfetch | head -1)"
+                if [[ -n "$ff_bin" ]]; then
+                    mkdir -p "$HOME/.local/bin"
+                    cp "$ff_bin" "$HOME/.local/bin/fastfetch" && chmod +x "$HOME/.local/bin/fastfetch"
+                    ff_ours=1
+                    echo "  installed via ${ff_asset}.tar.gz → ~/.local/bin"
+                fi
+            fi
+            if ff_works; then break; fi
+            # Our tarball binary fails to run (old glibc) → retry polyfilled
+            if [[ -n "$ff_ours" ]]; then rm -f "$HOME/.local/bin/fastfetch"; fi
+        done
+        rm -rf "$ff_tmp"
+    else
+        echo "  Skipped."
+    fi
 fi
-if command -v fastfetch &>/dev/null; then
-    echo "  fastfetch $(fastfetch --version 2>/dev/null | awk '{print $2}' || true) installed."
+
+if ff_works; then
+    echo "  fastfetch $(fastfetch --version 2>/dev/null | awk '{print $2}' || "$HOME/.local/bin/fastfetch" --version 2>/dev/null | awk '{print $2}' || true) installed."
 else
     echo "  fastfetch unavailable for $OS_DISTRO — skipping (it is optional)."
 fi

@@ -18,10 +18,11 @@
 | 编译工具 | `build-essential` (gcc, g++, make) | `gcc`, `gcc-c++`, `make` | `base-devel` | Xcode Command Line Tools |
 | wget | `wget` | `wget` | `wget` | `wget` |
 | unzip | `unzip` | `unzip` | `unzip` | `unzip` |
-| fastfetch | `fastfetch` | `fastfetch` | `fastfetch` | `fastfetch` |
+| fastfetch | `fastfetch` + 上游兜底 | `fastfetch` + 上游兜底 | `fastfetch` | `fastfetch` |
 | 剪贴板 | `xclip` | `xclip` | `xclip` | `pbcopy` (内置) |
 
 **注意事项：**
+- `fastfetch` 是**可选**工具，独立于批量列表安装 — 旧版 Debian/Ubuntu 仓库没有它，而批量 `apt-get` 里一个无法解析的包名会导致整个事务失败。见 [fastfetch 兜底](#fastfetch-兜底)。
 - Debian/Ubuntu 上，`fd-find` 和 `bat` 会在 `~/.local/bin/` 中创建符号链接到 `fd` 和 `bat`
 - macOS 上，Xcode Command Line Tools 会在不存在时自动安装
 - macOS 使用内置的 `pbcopy`/`pbpaste` 命令代替 `xclip`
@@ -117,6 +118,28 @@ RIG_CLIPBOARD_TOOL=none      # 从不安装
 ```
 
 `status.sh` 使用同一套检测，因此只会期待当前会话真正适用的那个工具。
+
+## fastfetch 兜底
+
+`fastfetch` 是可选的。按[上游 README](https://github.com/fastfetch-cli/fastfetch)，发行版仓库只有 Arch、Fedora、Alpine、openSUSE、Void、Debian 13+、Ubuntu 25.04+ 收录了它。原生仓库装不上时，脚本会先询问一次，再使用上游 GitHub release 资产（第三方二进制需要用户同意）：
+
+```
+fastfetch is not in debian's package repositories.
+  Install from the upstream GitHub release (.deb/.rpm via sudo, else tarball into ~/.local/bin)? [y/N]
+```
+
+确认后按以下顺序取第一个适用方式：
+
+| 系统 | 资产 | 方式 |
+|------|------|------|
+| Debian 系 | `fastfetch-linux-<arch>.deb` | `sudo dpkg -i`（缺依赖时 `apt-get install -f`） |
+| dnf 系（Fedora/RHEL…） | `fastfetch-linux-<arch>.rpm` | `sudo dnf install` |
+| zypper 系（openSUSE…） | `fastfetch-linux-<arch>.rpm` | `sudo zypper install` |
+| 其它一切（含 Alpine → musl 资产、macOS、无 sudo） | `fastfetch-<os>-<arch>.tar.gz` | 解压二进制到 `~/.local/bin` — **免 root** |
+
+装上的二进制若无法运行（glibc 太旧），自动重试 `-polyfilled` 构建变体。我们放进 `~/.local/bin` 的坏副本会被清掉；用户**预先存在**的 `~/.local/bin/fastfetch` 绝不会被删。
+
+无 TTY 时什么都不下载 — 只打印资产名供手动安装。`status.sh` 不把 fastfetch 计入必需工具。
 
 ## 安装后
 
