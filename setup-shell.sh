@@ -273,6 +273,22 @@ if ! grep -q 'bindkey -[ev]' "$ZSHRC" 2>/dev/null; then
     MISSING_ZSHRC+=('bindkey -e  # emacs keymap: EDITOR may contain "vi" (nvim)')
 fi
 
+# Basic color support: the distro .bashrc in /etc/skel sets these, but a zsh
+# user switching shells loses ls/grep colors entirely. BSD/macOS ls has no
+# --color; it uses CLICOLOR + -G instead.
+if ! grep -qE 'color=auto|CLICOLOR' "$ZSHRC" 2>/dev/null; then
+    if is_macos; then
+        MISSING_ZSHRC+=('export CLICOLOR=1')
+        MISSING_ZSHRC+=("alias ls='ls -G'")
+    else
+        MISSING_ZSHRC+=('eval "$(dircolors -b 2>/dev/null)"')
+        MISSING_ZSHRC+=("alias ls='ls --color=auto'")
+        MISSING_ZSHRC+=("alias ll='ls -alF'")
+        MISSING_ZSHRC+=("alias la='ls -A'")
+        MISSING_ZSHRC+=("alias grep='grep --color=auto'")
+    fi
+fi
+
 # --- Report ------------------------------------------------------------------
 
 echo ""

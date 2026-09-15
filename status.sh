@@ -233,8 +233,9 @@ detect_tools() {
     # Essential tools installed by setup-tools.sh.
     # The clipboard helper is session-dependent, so only the applicable one is
     # expected — expecting xclip on a Wayland box would report a permanent
-    # false gap on a correctly provisioned machine.
-    local tools=(rg jq fd bat tree shellcheck gh wget unzip fastfetch)
+    # false gap on a correctly provisioned machine. Same reasoning excludes
+    # fastfetch: several distros do not package it at all.
+    local tools=(rg jq fd bat tree shellcheck gh wget unzip)
     local clipboard_tool
     clipboard_tool="$(tools_clipboard_tool)"
     [[ -n "$clipboard_tool" ]] && tools+=("$clipboard_tool")

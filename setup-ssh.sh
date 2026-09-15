@@ -11,9 +11,13 @@ set -euo pipefail
 #   SSH_PORT        - custom SSH port (empty = don't change)
 #   SSH_PUBKEY      - public key string. When set, adds key and disables password auth.
 #   SSH_PRIVATE_KEY - private key content. When set, writes to ~/.ssh/ and derives public key.
-#   SSH_PROXY_HOST  - proxy host for GitHub SSH (default: 127.0.0.1)
-#   SSH_PROXY_PORT  - proxy port for GitHub SSH (e.g. 7890). When set, configures
-#                     ~/.ssh/config to connect via ssh.github.com:443 with corkscrew proxy.
+#   SSH_PROXY_HOST  - local HTTP proxy host for GitHub *SSH transport*
+#                     (default: 127.0.0.1)
+#   SSH_PROXY_PORT  - local HTTP proxy port (e.g. 7890 for Clash). When set,
+#                     ~/.ssh/config makes `git clone git@github.com:...` reach
+#                     GitHub via ssh.github.com:443 wrapped in a corkscrew
+#                     CONNECT tunnel — for networks that block outbound SSH:22.
+#                     Unrelated to GH_PROXY (the script download mirror).
 
 # --- Source multi-OS libraries ------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
@@ -258,8 +262,8 @@ else
     echo "  Skipped (no public key provided)."
 fi
 
-# [6/6] Configure GitHub SSH proxy
-echo "[6/6] Configuring GitHub SSH proxy..."
+# [6/6] Configure GitHub SSH-over-proxy (git's SSH transport via local HTTP proxy)
+echo "[6/6] Configuring GitHub SSH transport proxy..."
 if [ -n "$SSH_PROXY_PORT" ]; then
     # Ensure corkscrew is installed
     if ! command -v corkscrew &>/dev/null; then
@@ -284,10 +288,10 @@ Host github.com
     User git
     ProxyCommand corkscrew $SSH_PROXY_HOST $SSH_PROXY_PORT %h %p
 EOF
-        echo "  GitHub SSH proxy configured (port 443 via $SSH_PROXY_HOST:$SSH_PROXY_PORT)."
+        echo "  GitHub SSH transport proxy configured: git@github.com goes via ssh.github.com:443 through corkscrew at $SSH_PROXY_HOST:$SSH_PROXY_PORT."
     fi
 else
-    echo "  Skipped (SSH_PROXY_PORT not set)."
+    echo "  Skipped (SSH_PROXY_PORT not set — git@github.com will use a direct SSH:22 connection)."
 fi
 
 # Restart sshd if config changed; roll back if the service fails to come up.

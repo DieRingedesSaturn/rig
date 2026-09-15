@@ -25,7 +25,7 @@ Linux 和 macOS 自动化配置与轻量级 VPS 主机状态管理器 (Personal 
      - `~/.config/starship.toml`：写入简洁现代的终端提示符配置（Git 仓库路径锚定防超长、第一行尾随时间戳 `[HH:MM]`、感知 Python 虚拟环境与 Node.js 状态）；
      - `~/.tmux.conf`：配置鼠标滚轮、大行数回滚缓冲，并自动适配系统剪贴板（Wayland 用 `wl-copy`、X11 用 `xclip`、macOS 用 `pbcopy`、无头服务器使用 OSC 52）；
      - `~/.gitconfig`：配置默认分支 `init.defaultBranch=main`、`pull.rebase=true` 及用户名和邮箱；
-     - `~/.ssh/config`：按需注入 GitHub 443 端口代理隧道（使用 `corkscrew`）；
+     - `~/.ssh/config`：设置 `SSH_PROXY_PORT` 时注入 `Host github.com` 块，让 git SSH 经 `ssh.github.com:443` + `corkscrew`；
      - `~/.config/rig/config`：持久化当前机器的组件清单与 Profile（如 `vps` 预设）。
 
 4. **安全底线与非侵入约束 (Safety Guarantees)**
@@ -247,7 +247,7 @@ curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-
 
 #### SSH (`setup-ssh.sh`)
 
-配置 OpenSSH 服务器：自定义端口、密钥登录和 GitHub SSH 代理。
+配置 OpenSSH 服务器：自定义端口、密钥登录和可选的 GitHub SSH 传输代理。
 
 仅确保 sshd 运行：
 
@@ -263,7 +263,7 @@ export SSH_PUBKEY="ssh-ed25519 AAAA..."
 curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-ssh.sh | bash
 ```
 
-配置 GitHub SSH 代理（22 端口被封或需要走代理时）：
+配置 GitHub SSH 传输代理——让 `git@github.com` 经本地 HTTP 代理走 `ssh.github.com:443`，用于封锁出站 SSH:22 的网络（与 `GH_PROXY` 脚本下载镜像无关）：
 
 ```bash
 export SSH_PROXY_PORT=7890
@@ -336,7 +336,7 @@ curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/DieRingedesSat
 
 | 变量 | 作用域 | 默认值 | 说明 |
 |------|--------|--------|------|
-| `GH_PROXY` | `install.sh` | _（空）_ | GitHub 代理地址，用于加速脚本下载 |
+| `GH_PROXY` | `install.sh` | _（空）_ | 下载 rig 脚本本身的 URL 前缀镜像（如 `https://gh-proxy.org`），GitHub raw 不可达时使用 |
 
 ### Tmux
 
@@ -422,8 +422,8 @@ containers
 | `SSH_PORT` | _（空）_ | 自定义 SSH 端口。留空则不修改。 |
 | `SSH_PUBKEY` | _（空）_ | 公钥字符串。设置后添加公钥至 authorized_keys（密码与账号安全加固由 security 统一执行）。 |
 | `SSH_PRIVATE_KEY` | _（空）_ | 私钥内容。设置后导入到 `~/.ssh/`，用于对外 SSH 连接。 |
-| `SSH_PROXY_HOST` | `127.0.0.1` | 代理主机地址。仅在设置了 `SSH_PROXY_PORT` 时生效。 |
-| `SSH_PROXY_PORT` | _（空）_ | 代理端口（如 `7890`）。配置 GitHub SSH 通过 `ssh.github.com:443` + corkscrew 代理连接。 |
+| `SSH_PROXY_HOST` | `127.0.0.1` | 本地 HTTP 代理主机（如 Clash）。仅在设置了 `SSH_PROXY_PORT` 时生效。 |
+| `SSH_PROXY_PORT` | _（空）_ | 本地 HTTP 代理端口（如 `7890`）。让 `git@github.com` 经 corkscrew 走 `ssh.github.com:443`，用于封锁出站 SSH:22 的网络。与 `GH_PROXY` 无关。 |
 
 ## 从零开始
 

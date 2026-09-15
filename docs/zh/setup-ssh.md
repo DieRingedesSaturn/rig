@@ -1,6 +1,8 @@
 # setup-ssh.sh
 
-配置 SSH 服务器：自定义端口、密钥登录和 GitHub SSH 代理。
+配置 SSH 服务器：自定义端口、密钥登录和可选的 GitHub SSH 传输代理。
+
+> **术语区分：** `SSH_PROXY_*` 与 `GH_PROXY` 互不相干。`SSH_PROXY_*` 让 *git 的 SSH 连接*经本地 HTTP 代理到达 github.com（用于封锁出站 SSH:22 的网络）；`GH_PROXY` 是下载 rig 脚本本身的 URL 前缀镜像（用于 raw.githubusercontent.com 不可达的网络）。
 
 ## 操作系统特定行为
 
@@ -26,7 +28,7 @@
 | 端口 | 自定义 SSH 端口（可选） |
 | 私钥 | 导入到 `~/.ssh/`，用于对外 SSH（如 GitHub） |
 | 公钥 | 添加到 `~/.ssh/authorized_keys`，用于被连入 |
-| GitHub SSH 代理 | `~/.ssh/config` 配置 443 端口 + corkscrew 代理（可选） |
+| GitHub SSH 传输代理 | `~/.ssh/config`：`git@github.com` → `ssh.github.com:443` 经 corkscrew（可选，`SSH_PROXY_PORT`） |
 | 安全加固 | 禁用密码/Root 登录等由 `setup-security.sh` 统一门禁处理 |
 
 ## 执行流程
@@ -37,7 +39,7 @@
 | 2/5 | 导入私钥到 `~/.ssh/`（如设置了 `SSH_PRIVATE_KEY`），自动生成 `.pub` |
 | 3/5 | 设置自定义端口（如设置了 `SSH_PORT`） |
 | 4/5 | 添加公钥到 `~/.ssh/authorized_keys`（如设置了 `SSH_PUBKEY`） |
-| 5/5 | 配置 GitHub SSH 代理到 `~/.ssh/config`（如设置了 `SSH_PROXY_PORT`） |
+| 5/5 | 配置 GitHub SSH 传输代理到 `~/.ssh/config`（如设置了 `SSH_PROXY_PORT`） |
 
 ## 创建/修改的文件
 
@@ -47,7 +49,7 @@
 | `~/.ssh/authorized_keys` | 授权公钥文件（被连入） |
 | `~/.ssh/id_ed25519` | 导入的私钥（自动检测 RSA/ECDSA） |
 | `~/.ssh/id_ed25519.pub` | 自动派生的公钥 |
-| `~/.ssh/config` | SSH 客户端配置，含 GitHub 代理设置 |
+| `~/.ssh/config` | SSH 客户端配置；可选 `Host github.com` 走代理块 |
 | `~/.ssh/` | 目录不存在时创建，权限 `700` |
 
 ## 环境变量
@@ -57,8 +59,8 @@
 | `SSH_PORT` | _（空）_ | 自定义 SSH 端口。留空则不修改。 |
 | `SSH_PUBKEY` | _（空）_ | 公钥字符串（如 `ssh-ed25519 AAAA...`）。设置后添加密钥到 `authorized_keys`（密码禁用由 security 组件处理）。 |
 | `SSH_PRIVATE_KEY` | _（空）_ | 私钥内容。设置后写入 `~/.ssh/` 并自动派生公钥。密钥类型自动检测。 |
-| `SSH_PROXY_HOST` | `127.0.0.1` | 代理主机地址。仅在设置了 `SSH_PROXY_PORT` 时生效。 |
-| `SSH_PROXY_PORT` | _（空）_ | 代理端口（如 `7890`）。设置后配置 `~/.ssh/config`，通过 `ssh.github.com:443` + corkscrew 代理连接 GitHub。适用于 22 端口被封或需要代理的场景。 |
+| `SSH_PROXY_HOST` | `127.0.0.1` | 本地 HTTP 代理主机（如 Clash）。仅在设置了 `SSH_PROXY_PORT` 时生效。 |
+| `SSH_PROXY_PORT` | _（空）_ | 本地 HTTP 代理端口（如 `7890`）。设置后 `~/.ssh/config` 让 `git@github.com` 经 corkscrew CONNECT 隧道走 `ssh.github.com:443`——用于封锁出站 SSH:22 的网络。 |
 
 ## 重复运行行为
 

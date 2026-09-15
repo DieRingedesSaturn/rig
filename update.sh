@@ -133,7 +133,7 @@ COMP_DESCS=(
     "uv package manager"
     "Podman or Docker, rootless"
     "Tailscale VPN mesh network"
-    "OpenSSH server + keys + GitHub proxy"
+    "OpenSSH server + keys + GitHub SSH proxy (optional)"
     "Firewall rules and SSH hardening policies"
 )
 

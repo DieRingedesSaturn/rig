@@ -32,7 +32,9 @@ fi
 # Core tools (pkg_install auto-maps names per OS and skips unavailable ones).
 # Install only missing capabilities, not merely missing package names: for
 # example Fedora's wget2-wget already provides a valid `wget` command.
-TOOL_PACKAGES=(ripgrep jq fd bat tree shellcheck build-tools wget unzip fastfetch)
+# fastfetch is intentionally NOT in this list: it is optional and absent from
+# older Debian/Ubuntu repos, and one unresolvable name fails the whole batch.
+TOOL_PACKAGES=(ripgrep jq fd bat tree shellcheck build-tools wget unzip)
 MISSING_TOOL_PACKAGES=()
 for tool_pkg in "${TOOL_PACKAGES[@]}"; do
     if tools_command_available "$tool_pkg"; then
@@ -87,21 +89,30 @@ else
     echo "  Please install gh manually: https://github.com/cli/cli#installation"
 fi
 
-# [3/4] Ensure fastfetch is installed (fallback for older Debian/Ubuntu)
+# [3/4] Ensure fastfetch is installed (optional; not every distro packages it)
 echo "[3/4] Checking fastfetch..."
-if command -v fastfetch &>/dev/null; then
-    echo "  fastfetch $(fastfetch --version 2>/dev/null | awk '{print $2}' || true) installed."
-elif is_debian; then
+if ! command -v fastfetch &>/dev/null; then
+    # Packaged for Arch/Fedora/Alpine/openSUSE/Void and Debian 13+/Ubuntu 25.04+.
+    # Installed alone so an unresolvable name cannot fail the tools batch.
+    pkg_install fastfetch 2>/dev/null || true
+fi
+if ! command -v fastfetch &>/dev/null && is_debian; then
+    # Older Debian/Ubuntu: upstream publishes a self-contained .deb.
     echo "  fastfetch not found in default apt repos, attempting fallback installation..."
     arch_deb="amd64"
     [[ "$(uname -m)" == "aarch64" ]] && arch_deb="arm64"
-    ff_deb="/tmp/fastfetch.deb"
+    ff_deb="$(mktemp /tmp/fastfetch.XXXXXX.deb)"
     ff_url="https://github.com/fastfetch-cli/fastfetch/releases/latest/download/fastfetch-linux-${arch_deb}.deb"
     [[ -n "${GH_PROXY:-}" ]] && ff_url="${GH_PROXY%/}/${ff_url}"
     if curl -fsSL --retry 2 "$ff_url" -o "$ff_deb" 2>/dev/null; then
         sudo dpkg -i "$ff_deb" 2>/dev/null || sudo apt-get install -f -y 2>/dev/null || true
-        rm -f "$ff_deb"
     fi
+    rm -f "$ff_deb"
+fi
+if command -v fastfetch &>/dev/null; then
+    echo "  fastfetch $(fastfetch --version 2>/dev/null | awk '{print $2}' || true) installed."
+else
+    echo "  fastfetch unavailable for $OS_DISTRO — skipping (it is optional)."
 fi
 
 # [4/4] Create convenience symlinks (Debian renames fd-find→fdfind, bat→batcat)

@@ -25,7 +25,7 @@ Automated baseline manager and lightweight VPS state manager for Linux and macOS
      - `~/.config/starship.toml`: Writes a clean, modern prompt configuration (repo-anchored directory path, trailing `[HH:MM]` timestamp, Python venv & Node.js runtime aware);
      - `~/.tmux.conf`: Configures mouse wheel support, large scrollback buffers, and auto-adapts clipboard integration (`wl-copy` on Wayland, `xclip` on X11, `pbcopy` on macOS, and OSC 52 on headless VPS);
      - `~/.gitconfig`: Sets `init.defaultBranch=main`, `pull.rebase=true`, and user identity;
-     - `~/.ssh/config`: Injects GitHub 443 proxy tunnels via `corkscrew` when requested;
+     - `~/.ssh/config`: Injects a `Host github.com` block routing git SSH via `ssh.github.com:443` + `corkscrew` when `SSH_PROXY_PORT` is set;
      - `~/.config/rig/config`: Persists host-level component profiles and baseline settings.
 
 4. **Safety Guarantees & Non-Invasive Constraints**
@@ -247,7 +247,7 @@ curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-
 
 #### SSH (`setup-ssh.sh`)
 
-Configures OpenSSH server: custom port, authorized keys, and GitHub SSH proxy (sshd hardening handled by `setup-security.sh`).
+Configures OpenSSH server: custom port, authorized keys, and an optional GitHub SSH transport proxy (sshd hardening handled by `setup-security.sh`).
 
 Install only (ensure sshd running):
 
@@ -263,7 +263,7 @@ export SSH_PUBKEY="ssh-ed25519 AAAA..."
 curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-ssh.sh | bash
 ```
 
-With GitHub SSH proxy (when port 22 is blocked or proxy required):
+With the GitHub SSH transport proxy — routes `git@github.com` via `ssh.github.com:443` through a local HTTP proxy when outbound SSH:22 is blocked (not related to `GH_PROXY`, the script download mirror):
 
 ```bash
 export SSH_PROXY_PORT=7890
@@ -336,7 +336,7 @@ All environment variables across all scripts in one table.
 
 | Variable | Scope | Default | Description |
 |----------|-------|---------|-------------|
-| `GH_PROXY` | `install.sh` | _(empty)_ | GitHub proxy URL for script downloads |
+| `GH_PROXY` | `install.sh` | _(empty)_ | URL-prefix mirror for downloading rig scripts (e.g. `https://gh-proxy.org`) |
 
 ### Tmux
 
@@ -422,8 +422,8 @@ containers
 | `SSH_PORT` | _(empty)_ | Custom SSH port. Leave empty to keep current port. |
 | `SSH_PUBKEY` | _(empty)_ | Public key string. When set, adds key to authorized_keys (password hardening is performed by security component). |
 | `SSH_PRIVATE_KEY` | _(empty)_ | Private key content. When set, imports to `~/.ssh/` for outbound SSH. |
-| `SSH_PROXY_HOST` | `127.0.0.1` | Proxy host for GitHub SSH. Only used when `SSH_PROXY_PORT` is set. |
-| `SSH_PROXY_PORT` | _(empty)_ | Proxy port (e.g. `7890`). Configures GitHub SSH via `ssh.github.com:443` + corkscrew. |
+| `SSH_PROXY_HOST` | `127.0.0.1` | Local HTTP proxy host for GitHub's SSH transport (e.g. Clash). Only used when `SSH_PROXY_PORT` is set. |
+| `SSH_PROXY_PORT` | _(empty)_ | Local HTTP proxy port (e.g. `7890`). Routes `git@github.com` via `ssh.github.com:443` + corkscrew, for networks blocking outbound SSH:22. Unrelated to `GH_PROXY`. |
 
 ## Bootstrap Guide
 

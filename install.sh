@@ -16,7 +16,9 @@ set -uo pipefail
 #   curl -fsSL <url>/install.sh | bash -s -- --all
 #
 # Environment variables:
-#   GH_PROXY          - GitHub proxy URL (e.g. https://gh-proxy.org)
+#   GH_PROXY          - mirror prefix for downloading the rig scripts themselves
+#                       (e.g. https://gh-proxy.org), for networks where
+#                       raw.githubusercontent.com is unreachable
 #   TAILSCALE_AUTH_KEY - Auth key for Tailscale auto-connect
 # =============================================================================
 
@@ -150,7 +152,7 @@ COMP_DESCS=(
     "uv package manager"
     "Podman or Docker, rootless"
     "Tailscale VPN mesh network"
-    "OpenSSH server + keys + GitHub proxy"
+    "OpenSSH server + keys + GitHub SSH proxy (optional)"
     "Firewall, SSH hardening, port audit"
 )
 
@@ -322,12 +324,13 @@ Options:
   --components LIST      Comma-separated component list:
                          shell,tmux,git,tools,neovim,node,uv,containers,tailscale,ssh,security
   --dry-run              Print the resolved plan without changing the system
-  --gh-proxy URL         GitHub proxy URL (e.g., https://gh-proxy.org)
+  --gh-proxy URL         Download mirror prefix for rig scripts themselves
+                         (e.g., https://gh-proxy.org), when GitHub raw is unreachable
   -v, --verbose          Show raw script output (default: clean spinner)
   -h, --help             Show this help
 
 Environment variables:
-  GH_PROXY               Same as --gh-proxy
+  GH_PROXY               Same as --gh-proxy (script download mirror, NOT a git proxy)
   TAILSCALE_AUTH_KEY     Auth key for Tailscale auto-connect
 
 Config file (~/.config/rig/config):
