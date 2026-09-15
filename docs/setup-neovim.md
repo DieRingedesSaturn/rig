@@ -16,7 +16,7 @@ Installs Neovim (ensuring >= 0.9) and writes a dependency-free, terminal-native 
 | Item | Description |
 |------|-------------|
 | System editor | `update-alternatives --set editor/vi` → nvim (skipped when nvim lives under `$HOME` or sudo is unavailable) |
-| rc files | **Never modified** — if `EDITOR="nvim"` is missing from `~/.zshrc`/`~/.bashrc`, the suggested exports are only printed |
+| rc files | If `EDITOR="nvim"` is missing from `~/.zshrc`/`~/.bashrc`, the exports are appended after an explicit `y/N` confirmation with a backup; without a TTY they are only printed |
 | `init.lua` | Written when absent; existing file triggers a diff + keep/overwrite/append prompt |
 
 ## Default init.lua Highlights
@@ -35,7 +35,7 @@ Installs Neovim (ensuring >= 0.9) and writes a dependency-free, terminal-native 
 | `~/.local/bin/nvim` | Symlink, only via the static-binary fallback |
 | `~/.local/share/nvim-static/` | Static binary payload, fallback only |
 | `/usr/bin/editor`, `/usr/bin/vi` | `update-alternatives` targets (when applicable) |
-| `~/.zshrc`, `~/.bashrc` | **Never touched** — suggestions printed only |
+| `~/.zshrc`, `~/.bashrc` | Editor exports appended only after `y/N` confirmation + backup |
 
 ## Re-run Behavior
 

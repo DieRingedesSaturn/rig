@@ -95,19 +95,40 @@ if [[ "$NVIM_BIN" != "$HOME"* ]] && command -v update-alternatives >/dev/null 2>
     echo "  System-level alternatives set to $NVIM_BIN (editor, vi)"
 fi
 
-# Read-only check for user rc files
+# Same contract as everywhere else: rc files are only appended to after an
+# explicit yes plus a backup; without a usable /dev/tty the lines are printed.
+_editor_block=$'export EDITOR="nvim"\nexport VISUAL="nvim"\nexport SUDO_EDITOR="nvim"\nalias vim="nvim"'
+
+_needy_rc=()
 for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
     [[ -f "$rc" ]] || continue
-    if ! grep -q 'EDITOR="nvim"' "$rc" 2>/dev/null; then
-        echo "  Note: $rc does not export EDITOR=\"nvim\". You can add:"
-        echo "      export EDITOR=\"nvim\""
-        echo "      export VISUAL=\"nvim\""
-        echo "      export SUDO_EDITOR=\"nvim\""
-        echo "      alias vim=\"nvim\""
-    else
+    if grep -q 'EDITOR="nvim"' "$rc" 2>/dev/null; then
         echo "  $rc already configures nvim as default editor."
+    else
+        _needy_rc+=("$rc")
     fi
 done
+
+if [[ "${#_needy_rc[@]}" -gt 0 ]]; then
+    if rig_can_prompt; then
+        printf "  Export nvim as default editor in: %s? [y/N] " "${_needy_rc[*]}"
+        read -r answer </dev/tty || answer="n"
+        if [[ "$answer" == [yY]* ]]; then
+            for rc in "${_needy_rc[@]}"; do
+                rig_user_backup "$rc" "$(basename "$rc")" >/dev/null 2>&1 || true
+                printf '\n# Added by rig setup-neovim\n%s\n' "$_editor_block" >>"$rc"
+                echo "  ✔ Appended editor exports to $rc (backup taken)."
+            done
+        else
+            echo "  Kept as-is."
+        fi
+    else
+        for rc in "${_needy_rc[@]}"; do
+            echo "  Note: $rc does not export EDITOR=\"nvim\". You can add:"
+            printf '%s\n' "$_editor_block" | sed 's/^/      /'
+        done
+    fi
+fi
 
 # --- [3/4] Neovim Configuration (init.lua) -----------------------------------
 echo ""

@@ -16,7 +16,7 @@
 | 项目 | 说明 |
 |------|------|
 | 系统编辑器 | `update-alternatives --set editor/vi` → nvim（nvim 位于 `$HOME` 下或 sudo 不可用时跳过） |
-| rc 文件 | **绝不修改**——若 `~/.zshrc`/`~/.bashrc` 缺 `EDITOR="nvim"`，仅打印建议导出项 |
+| rc 文件 | 若 `~/.zshrc`/`~/.bashrc` 缺 `EDITOR="nvim"`，在显式 `y/N` 确认后追加导出项并先备份；无 TTY 时仅打印 |
 | `init.lua` | 缺失时写入；已存在则展示 diff 并提供 保留/覆盖/追加 菜单 |
 
 ## 默认 init.lua 要点
@@ -35,7 +35,7 @@
 | `~/.local/bin/nvim` | 软链，仅静态包兜底路径 |
 | `~/.local/share/nvim-static/` | 静态包内容，仅兜底路径 |
 | `/usr/bin/editor`、`/usr/bin/vi` | `update-alternatives` 目标（适用时） |
-| `~/.zshrc`、`~/.bashrc` | **绝不触碰**——仅打印建议 |
+| `~/.zshrc`、`~/.bashrc` | 编辑器导出项仅在 `y/N` 确认 + 备份后追加 |
 
 ## 重复运行行为
 
