@@ -366,7 +366,10 @@ security_render_sshd_config() {
 # Arguments: param_name, default_value
 security_get_sshd_param() {
     local param="$1"
-    local default_val="${2:-unknown}"
+    # Use ${2-...} (no colon): callers pass an explicit "" default for
+    # directives like AllowUsers where "unset" means "not restricted", and
+    # that must not be coerced to "unknown".
+    local default_val="${2-unknown}"
 
     # 1. Prefer sshd -T for fully resolved runtime configuration
     local sshd_bin=""
@@ -385,8 +388,15 @@ security_get_sshd_param() {
         fi
         local t_val=""
         t_val="$("$sshd_bin" -T 2>/dev/null | grep -i "^${param} " | head -1 | awk '{print $2}' || true)"
-        if [[ -z "$t_val" ]] && sudo -n true 2>/dev/null; then
-            t_val="$(sudo "$sshd_bin" -T 2>/dev/null | grep -i "^${param} " | head -1 | awk '{print $2}' || true)"
+        # sshd -T needs root to read host keys. Retry via sudo: first
+        # non-interactive (cached/NOPASSWD creds), then a visible prompt when
+        # a TTY exists — silently falling back to defaults caused false
+        # anti-lockout rejections.
+        if [[ -z "$t_val" ]]; then
+            t_val="$(sudo -n "$sshd_bin" -T 2>/dev/null | grep -i "^${param} " | head -1 | awk '{print $2}' || true)"
+        fi
+        if [[ -z "$t_val" ]] && rig_can_prompt 2>/dev/null; then
+            t_val="$(sudo "$sshd_bin" -T </dev/tty 2>/dev/null | grep -i "^${param} " | head -1 | awk '{print $2}' || true)"
         fi
         if [[ -n "$t_val" ]]; then
             echo "$t_val"
