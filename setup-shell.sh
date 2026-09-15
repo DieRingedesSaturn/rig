@@ -183,7 +183,7 @@ read_only = " 🔒"
 disabled = false
 time_format = "%R"
 format = "[\\[$time\\]]($style) "
-style = "dimmed white"
+style = "bright-black"
 
 [python]
 disabled = false
