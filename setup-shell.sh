@@ -266,6 +266,13 @@ if [[ -n "$SYNTAX_FILE" && -f "$ZSHRC" ]]; then
     fi
 fi
 
+# Force the emacs line-editing keymap unless the user already picked one:
+# zsh switches ZLE to vi mode whenever EDITOR/VISUAL contains "vi" (nvim
+# counts), which silently breaks Ctrl+A/Ctrl+E readline bindings.
+if ! grep -q 'bindkey -[ev]' "$ZSHRC" 2>/dev/null; then
+    MISSING_ZSHRC+=('bindkey -e  # emacs keymap: EDITOR may contain "vi" (nvim)')
+fi
+
 # --- Report ------------------------------------------------------------------
 
 echo ""
