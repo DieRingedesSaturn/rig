@@ -152,6 +152,18 @@ if rig_can_prompt && [[ "${RIG_NON_INTERACTIVE:-0}" -ne 1 ]]; then
     printf "\n"
 fi
 
+# Moving the SSH port only updates the host firewall. A cloud security group
+# or edge firewall in front of the VPS keeps filtering the old rules — and
+# locks out the next login if the new port was never opened there.
+if [[ "$RIG_SSH_PORT" != "$CURRENT_SSH_PORT" && "$RIG_SSH_ACCESS" == "public" ]]; then
+    echo ""
+    echo "  ⚠ SSH port is changing ${CURRENT_SSH_PORT} -> ${RIG_SSH_PORT}."
+    echo "    Before logging out, make sure port ${RIG_SSH_PORT}/tcp is also allowed in"
+    echo "    your CLOUD PROVIDER's security group / edge firewall — this host-level"
+    echo "    firewall cannot do that for you. Keep this session open until a new"
+    echo "    connection on port ${RIG_SSH_PORT} is verified."
+fi
+
 case "$RIG_SSH_PORT" in
     ''|*[!0-9]*) echo "Invalid SSH port: $RIG_SSH_PORT" >&2; exit 1 ;;
 esac
