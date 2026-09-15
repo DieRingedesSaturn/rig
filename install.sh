@@ -1153,6 +1153,31 @@ install_rig_cli() {
             if sudo -n true 2>/dev/null && [[ -d /usr/local/bin ]]; then
                 sudo ln -sf "$dest" /usr/local/bin/rig
                 printf "  ${SYM_CHECK} ${GREEN}Also linked ${CYAN}/usr/local/bin/rig${NC} ${DIM}(already on PATH)${NC}\n"
+            elif rig_can_prompt; then
+                # The symlink needs sudo; without cached creds, offer the
+                # PATH export into every existing rc file instead (backup first).
+                local _path_line='export PATH="$HOME/.local/bin:$PATH"' _rc _needy=()
+                for _rc in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
+                    [[ -f "$_rc" ]] && ! grep -qF 'HOME/.local/bin' "$_rc" 2>/dev/null && _needy+=("$_rc")
+                done
+                if [[ "${#_needy[@]}" -gt 0 ]]; then
+                    printf "  ${SYM_WARN} ${YELLOW}%s is not in your PATH.${NC}\n" "$HOME/.local/bin"
+                    printf "  Append %s to: %s? [y/N] " "${CYAN}$_path_line${NC}" "${_needy[*]}"
+                    local _ans=""
+                    read -r _ans </dev/tty || _ans="n"
+                    if [[ "$_ans" == [yY]* ]]; then
+                        for _rc in "${_needy[@]}"; do
+                            cp "$_rc" "$_rc.rig-bak-$(date +%Y%m%d%H%M%S)" 2>/dev/null || true
+                            printf '\n# Added by rig installer\n%s\n' "$_path_line" >>"$_rc"
+                            printf "  ${SYM_CHECK} Added to ${CYAN}%s${NC} ${DIM}(backup taken)${NC}\n" "$_rc"
+                        done
+                    else
+                        printf "  ${DIM}Skipped — add it yourself when convenient.${NC}\n"
+                    fi
+                else
+                    printf "  ${SYM_WARN} ${YELLOW}%s is not in your PATH${NC}\n" "$HOME/.local/bin"
+                    printf "  ${DIM}Add to your shell profile:${NC} ${CYAN}%s${NC}\n" "$_path_line"
+                fi
             else
                 printf "  ${SYM_WARN} ${YELLOW}%s is not in your PATH${NC}\n" "$HOME/.local/bin"
                 printf "  ${DIM}Add to your shell profile:${NC} ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}\n"
