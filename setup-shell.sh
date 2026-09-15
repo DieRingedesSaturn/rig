@@ -9,15 +9,18 @@ set -euo pipefail
 # package manager. No Oh My Zsh, no framework, no git clones, no curl|sh for
 # anything the distro already packages.
 #
-# Non-negotiable contract — nothing is ever overwritten silently:
+# Non-negotiable contract — nothing is ever changed silently:
 #
-#   ~/.zshrc                  read-only, always
+#   ~/.zshrc                  never edited by default; missing init lines are
+#                             appended only after an explicit y/N confirmation
+#                             plus a timestamped backup
 #   ~/.config/starship.toml   created when absent; an existing file is only
 #                             replaced after explicit interactive confirmation
 #                             plus a timestamped backup
-#   default login shell       reported, never changed
+#   default login shell       reported, changed only after explicit y/N
+#                             confirmation (chsh)
 #
-# Anything the script cannot do without editing your files is printed as a
+# Without a usable /dev/tty the script stays fully read-only and prints a
 # checklist at the end instead of being done behind your back.
 # =============================================================================
 
@@ -274,10 +277,39 @@ else
         echo "  Your $ZSHRC may already reference them — those lines fail until installed."
     fi
     if [[ "${#MISSING_ZSHRC[@]}" -gt 0 ]]; then
-        echo "  Add these lines to $ZSHRC yourself; this script does not edit it:"
-        for line in "${MISSING_ZSHRC[@]}"; do
-            echo "      $line"
-        done
+        if rig_can_prompt; then
+            echo "  $ZSHRC is missing the lines below:"
+            for line in "${MISSING_ZSHRC[@]}"; do
+                echo "      $line"
+            done
+            printf "  Append them to %s? [y/N] " "$ZSHRC"
+            read -r answer </dev/tty || answer="n"
+            if [[ "$answer" == [yY]* ]]; then
+                if [[ -f "$ZSHRC" ]]; then
+                    rig_user_backup "$ZSHRC" zshrc >/dev/null 2>&1 || true
+                fi
+                # zsh-syntax-highlighting must be sourced last — it wraps ZLE
+                # widgets and later loads can bypass it.
+                {
+                    echo ""
+                    echo "# Added by rig setup-shell"
+                    for line in "${MISSING_ZSHRC[@]}"; do
+                        [[ "$line" == *zsh-syntax-highlighting* ]] || echo "$line"
+                    done
+                    for line in "${MISSING_ZSHRC[@]}"; do
+                        [[ "$line" == *zsh-syntax-highlighting* ]] && echo "$line"
+                    done
+                } >>"$ZSHRC"
+                echo "  ✔ Appended to $ZSHRC (backup taken if the file existed)."
+            else
+                echo "  Kept as-is. Add them yourself if you change your mind."
+            fi
+        else
+            echo "  Add these lines to $ZSHRC yourself; this script does not edit it:"
+            for line in "${MISSING_ZSHRC[@]}"; do
+                echo "      $line"
+            done
+        fi
     fi
 fi
 
@@ -287,9 +319,24 @@ current_shell="$(getent passwd "$USER" 2>/dev/null | cut -d: -f7 || true)"
 if [[ "$current_shell" == *zsh ]]; then
     echo "  ✔ default login shell: $current_shell"
 else
-    echo "  ✘ default login shell: $current_shell (not zsh)"
-    echo "    Not changed automatically — run this yourself:"
-    echo "        chsh -s $(command -v zsh)"
+    zsh_path="$(command -v zsh || true)"
+    if [[ -n "$zsh_path" ]] && rig_can_prompt; then
+        printf "  Default login shell is %s. Change it to %s? [y/N] " "$current_shell" "$zsh_path"
+        read -r answer </dev/tty || answer="n"
+        if [[ "$answer" == [yY]* ]]; then
+            if sudo -n chsh -s "$zsh_path" "$USER" 2>/dev/null || chsh -s "$zsh_path" </dev/tty 2>/dev/null; then
+                echo "  ✔ Login shell changed to $zsh_path (applies on next login)."
+            else
+                echo "  ✘ chsh failed — run it yourself: chsh -s $zsh_path"
+            fi
+        else
+            echo "  Kept $current_shell. To change later: chsh -s $zsh_path"
+        fi
+    else
+        echo "  ✘ default login shell: $current_shell (not zsh)"
+        echo "    Not changed automatically — run this yourself:"
+        echo "        chsh -s $zsh_path"
+    fi
 fi
 
 echo ""

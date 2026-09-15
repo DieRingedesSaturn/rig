@@ -8,12 +8,12 @@ This component is non-destructive by construction. Nothing is ever overwritten s
 
 | Path | Behaviour |
 |------|-----------|
-| `~/.zshrc` | **Read-only, always.** Never created, never appended to, never backed up, never restored. |
+| `~/.zshrc` | Read-only by default. Missing plugin/Starship init lines are appended only after an explicit `y/N` confirmation, with a timestamped backup first. |
 | `~/.config/starship.toml` | Created when absent. An existing config triggers a diff + keep/overwrite/append prompt; overwrite/append take a timestamped backup first. |
-| Default login shell | **Reported, never changed.** No `chsh` is ever run. |
+| Default login shell | Reported; changed via `chsh` only after an explicit `y/N` confirmation. |
 | Packages | Installed via the distro package manager only. The sole exception is the Starship fallback below. |
 
-Anything that would require editing your files is printed as a checklist at the end of the run, for you to apply yourself. This keeps the component compatible with dotfiles repositories that track `~/.zshrc` and `~/.config/starship.toml` — running it leaves those repos clean.
+Without a usable `/dev/tty` (non-interactive run), nothing is edited at all — anything that would require touching your files is printed as a checklist at the end of the run, for you to apply yourself. This keeps the component compatible with dotfiles repositories that track `~/.zshrc` and `~/.config/starship.toml` — declining every prompt leaves those repos clean.
 
 ## OS Support
 
@@ -45,7 +45,7 @@ Package names are resolved through `lib/pkg-maps.sh`, so the same abstract names
 | 2/5 | Ensure Starship exists. If the package manager could not provide it, run the upstream installer into `~/.local/bin` |
 | 3/5 | Probe for the plugin files. Package managers disagree about where they land, so a candidate list is searched rather than one path hardcoded |
 | 4/5 | Create `~/.config/starship.toml` when missing; existing files get the diff + keep/overwrite/append menu |
-| 5/5 | Read `~/.zshrc` and report: which plugins it loads, whether the Starship init line is present, whether zsh is the login shell, and any line-order advisory |
+| 5/5 | Read `~/.zshrc` and report: which plugins it loads, whether the Starship init line is present, whether zsh is the login shell, and any line-order advisory. Missing init lines and a non-zsh login shell can be fixed on the spot via `y/N` prompts (backup first) |
 
 ## Plugin Locations Probed
 
@@ -60,12 +60,12 @@ Package names are resolved through `lib/pkg-maps.sh`, so the same abstract names
 | File | Action |
 |------|--------|
 | `~/.config/starship.toml` | Created when absent (existing files get the diff menu); default prompt shows path, git state, language runtimes and time — plus a red `ssh:<hostname>` prefix inside SSH sessions |
-| `~/.zshrc` | **Never touched** |
-| `/etc/passwd` | **Never touched** |
+| `~/.zshrc` | Appended to only after explicit `y/N` confirmation + backup |
+| `/etc/passwd` | Login shell field updated only via `chsh` after `y/N` confirmation |
 
 ## Re-run Behaviour
 
-Fully idempotent. Already-installed packages are skipped, an existing `starship.toml` is left alone, and the `.zshrc` report is read-only — re-running it any number of times changes nothing on disk.
+Fully idempotent. Already-installed packages are skipped, an existing `starship.toml` is left alone unless you explicitly choose otherwise, and nothing is written without confirmation — declining every prompt leaves the disk unchanged.
 
 ## Post-Install Checklist
 

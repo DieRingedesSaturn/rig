@@ -98,7 +98,7 @@ flowchart LR
     CMP -->|已在策略白名单中开放| OK2[正常: 公共服务]
 ```
 
-### 2.4 现有配置文件比对与交互决策流 (Tmux 为例)
+### 2.4 现有配置文件比对与交互决策流 (由 `lib/backup.sh` 的 `rig_offer_config_baseline` 统一实现，tmux/starship/neovim 共用)
 
 ```mermaid
 flowchart TD
