@@ -35,19 +35,36 @@ fi
 # Load uv into current shell
 export PATH="$HOME/.local/bin:$PATH"
 
-# Ensure ~/.local/bin is in shell PATH for both zsh and bash
-_ensure_local_bin_path() {
-    local rc="$1"
-    local line='export PATH="$HOME/.local/bin:$PATH"'
-    # Skip if the shell isn't installed
-    [[ -f "$rc" ]] || return 0
-    # Check for explicit PATH export (not just env sourcing)
-    grep -qF "$line" "$rc" 2>/dev/null && return 0
-    printf '\n# uv / rig: ensure ~/.local/bin in PATH\n%s\n' "$line" >> "$rc"
-    echo "  Added ~/.local/bin to PATH in $(basename "$rc")"
-}
-_ensure_local_bin_path "$HOME/.zshrc"
-_ensure_local_bin_path "$HOME/.bashrc"
+# Ensure ~/.local/bin is in shell PATH for both zsh and bash. Never appended
+# silently: with a usable /dev/tty the user is asked first (a backup is taken);
+# without one the line is only printed.
+# shellcheck source=lib/backup.sh
+source "$SCRIPT_DIR/lib/backup.sh" 2>/dev/null || true
+
+_PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+_needy_rc=()
+for _rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+    [[ -f "$_rc" ]] && ! grep -qF "$_PATH_LINE" "$_rc" 2>/dev/null && _needy_rc+=("$_rc")
+done
+
+if [[ "${#_needy_rc[@]}" -gt 0 ]]; then
+    if rig_can_prompt 2>/dev/null; then
+        printf "  ~/.local/bin is not on PATH in: %s. Append the export line? [y/N] " "${_needy_rc[*]}"
+        read -r answer </dev/tty || answer="n"
+        if [[ "$answer" == [yY]* ]]; then
+            for _rc in "${_needy_rc[@]}"; do
+                rig_user_backup "$_rc" "$(basename "$_rc")" >/dev/null 2>&1 || true
+                printf '\n# uv / rig: ensure ~/.local/bin in PATH\n%s\n' "$_PATH_LINE" >>"$_rc"
+                echo "  ✔ Added ~/.local/bin to PATH in $(basename "$_rc") (backup taken)."
+            done
+        else
+            echo "  Kept as-is — uv/rig may not resolve until ~/.local/bin is on PATH."
+        fi
+    else
+        echo "  ~/.local/bin is not on PATH in: ${_needy_rc[*]}; add this yourself:"
+        echo "      $_PATH_LINE"
+    fi
+fi
 
 # Install Python if requested
 if [ -n "$UV_PYTHON" ]; then

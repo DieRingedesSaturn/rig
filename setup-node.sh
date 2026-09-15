@@ -202,17 +202,37 @@ fi
 echo ""
 echo "[4/4] Shell integration"
 
-# Read-only check. This script does not edit ~/.zshrc — the shell component is
-# the only thing that ever writes a starter config, and even that refuses to
-# touch an existing file.
-if [[ -f "$ZSHRC" ]] && grep -q 'NVM_DIR' "$ZSHRC"; then
-    echo "  $ZSHRC already loads nvm"
-else
-    echo "  $ZSHRC does not load nvm; add this yourself:"
-    echo ""
-    echo "      export NVM_DIR=\"\$HOME/.nvm\""
-    echo "      [ -s \"\$NVM_DIR/nvm.sh\" ] && \\. \"\$NVM_DIR/nvm.sh\""
-    echo "      [ -s \"\$NVM_DIR/bash_completion\" ] && \\. \"\$NVM_DIR/bash_completion\""
+# shellcheck source=lib/backup.sh
+source "$SCRIPT_DIR/lib/backup.sh" 2>/dev/null || true
+
+# Nothing is written without an explicit yes. Without a usable /dev/tty the
+# script stays read-only and prints the lines for manual application.
+_nvm_block=$'export NVM_DIR="$HOME/.nvm"\n[ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"\n[ -s "$NVM_DIR/bash_completion" ] && \\. "$NVM_DIR/bash_completion"'
+
+_rc_files=()
+for _rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+    [[ -f "$_rc" ]] && ! grep -q 'NVM_DIR' "$_rc" && _rc_files+=("$_rc")
+done
+[[ -f "$ZSHRC" ]] && grep -q 'NVM_DIR' "$ZSHRC" && echo "  $ZSHRC already loads nvm"
+
+if [[ "${#_rc_files[@]}" -gt 0 ]]; then
+    if rig_can_prompt 2>/dev/null; then
+        printf "  nvm init lines missing from: %s. Append them? [y/N] " "${_rc_files[*]}"
+        read -r answer </dev/tty || answer="n"
+        if [[ "$answer" == [yY]* ]]; then
+            for _rc in "${_rc_files[@]}"; do
+                rig_user_backup "$_rc" "$(basename "$_rc")" >/dev/null 2>&1 || true
+                printf '\n# Added by rig setup-node\n%s\n' "$_nvm_block" >>"$_rc"
+                echo "  ✔ Appended nvm init to $_rc (backup taken)."
+            done
+        else
+            echo "  Kept as-is."
+        fi
+    else
+        echo "  ${_rc_files[*]} do not load nvm; add this yourself:"
+        echo ""
+        printf '%s\n' "$_nvm_block" | sed 's/^/      /'
+    fi
 fi
 
 echo ""

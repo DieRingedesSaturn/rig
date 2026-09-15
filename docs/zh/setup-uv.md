@@ -36,7 +36,7 @@ uv 适用于所有支持的平台（Linux 和 macOS）。无需操作系统特�
 | `~/.local/bin/uvx` | uvx（uv 工具运行器） |
 | `~/.local/share/uv/` | uv 缓存和数据目录 |
 | `~/.local/share/uv/python/` | 已安装的 Python 版本 |
-| `~/.zshrc`、`~/.bashrc` | 如尚未包含，追加 `export PATH="$HOME/.local/bin:$PATH"`（保证新终端中 uv 可用） |
+| `~/.zshrc`、`~/.bashrc` | 仅在显式 `y/N` 确认后追加 `export PATH="$HOME/.local/bin:$PATH"`，且先自动备份；无 TTY 时只打印该行 |
 
 ## 环境变量
 
