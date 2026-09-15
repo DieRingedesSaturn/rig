@@ -1,1 +1,11 @@
 .omc
+
+# sandbox dotfile mounts
+.bash_profile
+.bashrc
+.gitconfig
+.gitmodules
+.profile
+.ripgreprc
+.idea
+.mcp.json

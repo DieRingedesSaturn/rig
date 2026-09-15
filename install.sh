@@ -920,7 +920,7 @@ run_component() {
         # Components that may ask questions must run in the foreground — under
         # `curl | bash` stdin is a pipe, so -t 0 cannot detect interactivity.
         case "${COMP_IDS[$idx]}" in
-            shell|git|neovim|tmux|containers|security) needs_visible_tty=1 ;;
+            shell|git|neovim|tmux|containers|security|node|uv) needs_visible_tty=1 ;;
         esac
     fi
 

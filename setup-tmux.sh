@@ -110,25 +110,50 @@ detect_clipboard() {
 CLIPBOARD_CMD="$(detect_clipboard)"
 
 generate_config() {
+    local conf_path="${1:-$TMUX_CONF}"
     echo '# Rig Tmux Baseline'
     echo '# ─── General ───'
     echo 'set -g extended-keys on'
     echo 'set -g extended-keys-format csi-u'
+    echo 'set -as terminal-features ",*:RGB"'
+    echo 'set -g focus-events on'
+    echo 'set -g escape-time 0'
     if [[ "$TMUX_MOUSE" == "1" ]]; then
         echo 'set -g mouse on'
     fi
     echo "set -g history-limit $TMUX_HISTORY_LIMIT"
+    echo 'set -g base-index 1'
+    echo 'setw -g pane-base-index 1'
+    echo 'set -g renumber-windows on'
+    echo ''
+    echo '# ─── Key bindings ───'
+    echo 'setw -g mode-keys vi'
+    echo 'bind -T copy-mode-vi v send -X begin-selection'
+    echo 'bind -T copy-mode-vi y send -X copy-selection-and-cancel'
+    echo 'bind -T copy-mode-vi C-v send -X rectangle-toggle'
+    printf 'bind r source-file %s \\; display-message "tmux config reloaded"\n' "$conf_path"
+    echo 'bind | split-window -h'
+    echo 'bind - split-window -v'
+    echo ''
+    echo '# ─── Status line ───'
+    echo 'set -g status-interval 5'
+    echo 'set -g status-left-length 40'
+    echo 'set -g status-right-length 120'
+    echo 'set -g status-left "#[bold][#S]"'
+    echo 'set -g status-right "%Y-%m-%d %H:%M"'
     echo ''
     echo '# ─── Clipboard ───'
     if [[ -n "$CLIPBOARD_CMD" ]]; then
         echo "# Dragging a selection copies it via $CLIPBOARD_CMD"
         printf 'bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel "%s"\n' "$CLIPBOARD_CMD"
         echo 'set -g set-clipboard on'
+        echo 'set -g allow-passthrough on'
     else
         echo '# No display server or clipboard helper found, so tmux talks to the'
         echo '# terminal directly using OSC 52. Works over SSH with a terminal'
         echo '# that supports it (kitty, Konsole, WezTerm, iTerm2, Ghostty, ...).'
         echo 'set -g set-clipboard on'
+        echo 'set -g allow-passthrough on'
     fi
 }
 
@@ -190,7 +215,7 @@ if [[ -n "$EXISTING_CONF" ]]; then
     done
 
     TMP_BASELINE="$(mktemp "${TMPDIR:-/tmp}/rig-tmux-baseline.XXXXXX")"
-    generate_config > "$TMP_BASELINE"
+    generate_config "$EXISTING_CONF" > "$TMP_BASELINE"
 
     # Compare existing with recommended baseline
     if cmp -s "$EXISTING_CONF" "$TMP_BASELINE"; then
@@ -252,7 +277,7 @@ if [[ -n "$EXISTING_CONF" ]]; then
         rm -f "$TMP_BASELINE"
     fi
 else
-    generate_config > "$TMUX_CONF"
+    generate_config "$TMUX_CONF" > "$TMUX_CONF"
     echo "  created $TMUX_CONF"
     if [[ -n "$CLIPBOARD_CMD" ]]; then
         echo "  clipboard: $CLIPBOARD_CMD"
