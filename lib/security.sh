@@ -395,7 +395,7 @@ security_get_sshd_param() {
         if [[ -z "$t_val" ]]; then
             t_val="$(sudo -n "$sshd_bin" -T 2>/dev/null | grep -i "^${param} " | head -1 | awk '{print $2}' || true)"
         fi
-        if [[ -z "$t_val" ]] && rig_can_prompt 2>/dev/null; then
+        if [[ -z "$t_val" && "${RIG_NO_SUDO_PROMPT:-0}" != "1" ]] && rig_can_prompt 2>/dev/null; then
             t_val="$(sudo "$sshd_bin" -T </dev/tty 2>/dev/null | grep -i "^${param} " | head -1 | awk '{print $2}' || true)"
         fi
         if [[ -n "$t_val" ]]; then

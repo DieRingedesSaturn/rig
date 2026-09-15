@@ -28,6 +28,10 @@ source "$SCRIPT_DIR/lib/tools.sh"
 source "$SCRIPT_DIR/lib/firewall.sh"
 # shellcheck source=lib/security.sh
 source "$SCRIPT_DIR/lib/security.sh"
+
+# A status report must never pop a sudo password prompt; degraded "unknown"
+# values are preferable to an interactive prompt from a read-only command.
+export RIG_NO_SUDO_PROMPT=1
 # shellcheck source=lib/backup.sh
 source "$SCRIPT_DIR/lib/backup.sh"
 
@@ -426,11 +430,17 @@ detect_tailscale() {
         status="installed"
         config="install-only"
 
-        # Check if connected to a tailnet
+        # Check if connected to a tailnet. `tailscale status --json` pretty-
+        # prints with a space after the colon, so a tight `"BackendState":"`
+        # match never fires; jq first, space-tolerant grep as fallback.
         local ts_status
         ts_status=$(tailscale status --json 2>/dev/null || echo "{}")
         local backend_state
-        backend_state=$(echo "$ts_status" | grep -o '"BackendState":"[^"]*"' 2>/dev/null | cut -d'"' -f4 || true)
+        if command -v jq >/dev/null 2>&1; then
+            backend_state=$(printf '%s' "$ts_status" | jq -r '.BackendState // ""' 2>/dev/null || true)
+        else
+            backend_state=$(printf '%s' "$ts_status" | grep -o '"BackendState": *"[^"]*"' 2>/dev/null | cut -d'"' -f4 || true)
+        fi
 
         if [[ "$backend_state" == "Running" ]]; then
             config="configured"
@@ -487,7 +497,10 @@ detect_ssh() {
             pgrep -x sshd &>/dev/null && sshd_running=1
         fi
 
-        if [[ $has_keys -eq 1 && $sshd_running -eq 1 ]]; then
+        # This component manages the sshd *server*: "configured" means sshd is
+        # running and at least one key path exists — authorized_keys alone is a
+        # fully valid server setup; a local private key is not required.
+        if [[ $sshd_running -eq 1 && ( $has_keys -eq 1 || $has_authkeys -eq 1 ) ]]; then
             config="configured"
         elif [[ $has_keys -eq 1 || $has_authkeys -eq 1 || $sshd_running -eq 1 ]]; then
             status="partial"
@@ -513,10 +526,18 @@ detect_security() {
     root_login="$(security_get_sshd_param PermitRootLogin "unknown")"
     pw_auth="$(security_get_sshd_param PasswordAuthentication "unknown")"
 
-    if [[ $fw_active -eq 1 && "$root_login" == "no" && "$pw_auth" == "no" ]]; then
+    # "Configured" means a hardening policy was applied, not the strictest
+    # possible one: firewall up plus at least one of root-login or password
+    # auth disabled is an applied baseline. Fully permissive SSH with an
+    # active firewall still reports partial.
+    if [[ $fw_active -eq 1 && ( "$root_login" == "no" || "$pw_auth" == "no" ) ]]; then
         status="installed"
         config="configured"
-        version="${fw_backend} + key-only"
+        if [[ "$root_login" == "no" && "$pw_auth" == "no" ]]; then
+            version="${fw_backend} + key-only"
+        else
+            version="${fw_backend} + hardened"
+        fi
     elif [[ $fw_active -eq 1 || "$root_login" == "no" || "$pw_auth" == "no" ]]; then
         status="partial"
         config="install-only"

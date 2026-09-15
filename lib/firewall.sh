@@ -109,7 +109,17 @@ firewall_is_active() {
                 return 1
             fi
             # ufw status requires root; there is no unprivileged path.
-            sudo -n ufw status 2>/dev/null | grep -qi "Status: active"
+            if sudo -n ufw status 2>/dev/null | grep -qi "Status: active"; then
+                return 0
+            fi
+            # Cached creds may be absent in read-only contexts (status.sh,
+            # audits). The ufw service state is readable without privileges
+            # and only stays active while filtering is enabled.
+            if command -v systemctl >/dev/null 2>&1; then
+                systemctl is-active --quiet ufw 2>/dev/null
+                return
+            fi
+            return 1
             ;;
         firewalld)
             if ! command -v firewall-cmd >/dev/null 2>&1; then
