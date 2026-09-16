@@ -171,7 +171,7 @@ $character"""
 [hostname]
 ssh_only = true
 format = "[ssh:$hostname]($style) "
-style = "bold red"
+style = "bold dimmed red"
 
 [directory]
 truncation_length = 3
