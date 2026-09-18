@@ -31,7 +31,7 @@ Without a usable `/dev/tty` (non-interactive run), nothing is edited at all — 
 |------|--------|-------|
 | zsh | Package manager | Built in on macOS |
 | curl | Package manager | Needed only for the Starship fallback |
-| Starship | Package manager, or [starship.rs](https://starship.rs/) installer | Fallback installs to `~/.local/bin` (no sudo) when the distro does not package it |
+| Starship | Package manager, or [starship.rs](https://starship.rs/) installer | Fallback installs to `~/.local/bin` (no sudo) when the distro does not package it; asks `y/N` first since it pipes a remote script to sh |
 | zsh-autosuggestions | Package manager | distro package, not a git clone |
 | zsh-syntax-highlighting | Package manager | distro package, not a git clone |
 
@@ -84,6 +84,19 @@ chsh -s "$(command -v zsh)"
 ### Line order
 
 Upstream requires `zsh-syntax-highlighting` to be sourced **last**, because it wraps the ZLE line editor; anything that loads after it can bypass the highlighting widget. If the script detects that autosuggestions or the Starship init line come after it, it prints an advisory. This is informational — changing it is optional.
+
+## What the .zshrc offer contains
+
+Step 5/5 collects every missing piece and shows the full list before asking — one `y/N` covers the whole block, and a backup is taken first:
+
+| Missing in your `.zshrc` | Line appended |
+|--------------------------|---------------|
+| plugin not loaded | `source <plugin path>` (autosuggestions first, syntax-highlighting **last**) |
+| Starship init absent | `eval "$(starship init zsh)"` |
+| no `bindkey -e/-v` anywhere | `bindkey -e` — zsh picks vi mode when `EDITOR` contains "vi" (nvim counts), which breaks Ctrl+A/E |
+| no `color=auto`/`CLICOLOR` | Linux: `eval "$(dircolors -b)"` + `ls`/`ll`/`la`/`grep --color=auto` aliases · macOS: `export CLICOLOR=1` + `ls -G` |
+
+Each line is only offered when genuinely missing — your own aliases and keymap choices are never overwritten.
 
 ## Dependencies
 

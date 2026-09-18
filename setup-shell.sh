@@ -87,19 +87,28 @@ echo "[2/5] Ensuring Starship..."
 if command -v starship >/dev/null 2>&1; then
     echo "  found: $(command -v starship)"
 else
-    # Not packaged — fall back to the upstream installer, into ~/.local/bin so
-    # we stay out of the package manager's way and need no sudo.
-    echo "  not packaged, using the upstream installer -> ~/.local/bin"
-    mkdir -p "$HOME/.local/bin"
-    if curl -fsSL https://starship.rs/install.sh | sh -s -- -y -b "$HOME/.local/bin" >/dev/null 2>&1 \
-        && [[ -x "$HOME/.local/bin/starship" ]]; then
-        echo "  installed: $HOME/.local/bin/starship"
-        case ":$PATH:" in
-            *":$HOME/.local/bin:"*) ;;
-            *) echo "  NOTE: $HOME/.local/bin is not on your PATH — add it to your shell rc" ;;
-        esac
+    # Not packaged — the upstream installer is the only route on old Debian
+    # (https://starship.rs/guide). It pipes a remote script to sh, so ask first;
+    # it lands in ~/.local/bin and needs no sudo.
+    echo "  not packaged on $OS_DISTRO."
+    ss_reply="n"
+    if rig_can_prompt; then
+        read -r -p "  Install via the upstream installer (https://starship.rs/install.sh → ~/.local/bin)? [y/N] " ss_reply </dev/tty || ss_reply="n"
     else
-        echo "  WARNING: Starship could not be installed — see https://starship.rs" >&2
+        echo "  Non-interactive: skipping. Manual: curl -sS https://starship.rs/install.sh | sh -s -- -y -b ~/.local/bin"
+    fi
+    if [[ "$ss_reply" =~ ^[Yy] ]]; then
+        mkdir -p "$HOME/.local/bin"
+        if curl -fsSL https://starship.rs/install.sh | sh -s -- -y -b "$HOME/.local/bin" >/dev/null 2>&1 \
+            && [[ -x "$HOME/.local/bin/starship" ]]; then
+            echo "  installed: $HOME/.local/bin/starship"
+            case ":$PATH:" in
+                *":$HOME/.local/bin:"*) ;;
+                *) echo "  NOTE: $HOME/.local/bin is not on your PATH — add it to your shell rc" ;;
+            esac
+        else
+            echo "  WARNING: Starship could not be installed — see https://starship.rs" >&2
+        fi
     fi
 fi
 

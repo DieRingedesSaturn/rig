@@ -31,7 +31,7 @@
 |------|------|------|
 | zsh | 包管理器 | macOS 自带 |
 | curl | 包管理器 | 仅 Starship 回退方案需要 |
-| Starship | 包管理器，或 [starship.rs](https://starship.rs/) 官方安装器 | 发行版未打包时回退安装到 `~/.local/bin`（无需 sudo） |
+| Starship | 包管理器，或 [starship.rs](https://starship.rs/) 官方安装器 | 发行版未打包时回退安装到 `~/.local/bin`（无需 sudo）；因为是管道执行远程脚本，会先问 `y/N` |
 | zsh-autosuggestions | 包管理器 | 发行版包，不是 git clone |
 | zsh-syntax-highlighting | 包管理器 | 发行版包，不是 git clone |
 
@@ -84,6 +84,19 @@ chsh -s "$(command -v zsh)"
 ### 加载顺序
 
 上游要求 `zsh-syntax-highlighting` **最后**被 source，因为它会包裹 ZLE 行编辑器；任何在它之后加载的东西都可能绕过高亮组件。如果脚本检测到 autosuggestions 或 Starship 初始化行排在它后面，会打印一条提示。这只是信息，改不改随你。
+
+## .zshrc 追加清单包含什么
+
+第 5/5 步会把所有缺失项收集起来，先完整列给你看，再问一次 `y/N`——确认前自动备份：
+
+| `.zshrc` 里缺什么 | 追加的行 |
+|-------------------|----------|
+| 插件未加载 | `source <插件路径>`（autosuggestions 在前，syntax-highlighting **最后**） |
+| 没有 Starship 初始化 | `eval "$(starship init zsh)"` |
+| 全文没有 `bindkey -e/-v` | `bindkey -e` — `EDITOR` 含 "vi" 时（nvim 也算）zsh 会自动切 vi 键位，导致 Ctrl+A/E 失效 |
+| 没有 `color=auto`/`CLICOLOR` | Linux：`eval "$(dircolors -b)"` + `ls`/`ll`/`la`/`grep --color=auto` 别名 · macOS：`export CLICOLOR=1` + `ls -G` |
+
+每行只在确实缺失时才提供——你自己的别名和键位选择绝不会被覆盖。
 
 ## 依赖
 
