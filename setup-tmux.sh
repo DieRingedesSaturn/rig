@@ -113,8 +113,12 @@ generate_config() {
     local conf_path="${1:-$TMUX_CONF}"
     echo '# Rig Tmux Baseline'
     echo '# ─── General ───'
-    echo 'set -g extended-keys on'
-    echo 'set -g extended-keys-format csi-u'
+    echo '# NOTE: extended-keys/csi-u intentionally left off — apps that do not'
+    echo '# negotiate the kitty keyboard protocol (e.g. nvim < 0.10) then receive'
+    echo '# raw sequences like "^[[106;5u" for Ctrl+J/newlines. Opt in manually'
+    echo '# once every app in your stack speaks CSI-u:'
+    echo '#   set -g extended-keys on'
+    echo '#   set -g extended-keys-format csi-u'
     echo 'set -as terminal-features ",*:RGB"'
     echo 'set -g focus-events on'
     echo 'set -g escape-time 0'
@@ -180,7 +184,11 @@ if [[ -n "$EXISTING_CONF" ]]; then
     rc_lines() { grep -n "$1" "$EXISTING_CONF" 2>/dev/null | grep -v ':[[:space:]]*#' || true; }
     rc_has() { [[ -n "$(rc_lines "$1")" ]]; }
 
-    for setting in 'extended-keys' 'mouse' 'history-limit'; do
+    if rc_has 'extended-keys'; then
+        echo "  [note] extended-keys is on — apps without CSI-u support (nvim<0.10) receive raw escape sequences"
+    fi
+
+    for setting in 'mouse' 'history-limit'; do
         if rc_has "$setting"; then
             echo "  [ok] $setting is set"
         else

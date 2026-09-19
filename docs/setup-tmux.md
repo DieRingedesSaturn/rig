@@ -28,10 +28,14 @@ Written only when `~/.tmux.conf` is absent:
 
 ```tmux
 # ─── General ───
-set -g extended-keys on
-set -g extended-keys-format csi-u
+# (extended-keys/csi-u intentionally left off — see note below)
+set -as terminal-features ",*:RGB"
+set -g focus-events on
+set -g escape-time 0
 set -g mouse on
 set -g history-limit 100000
+set -g base-index 1
+# + vi copy-mode bindings, split keys, status line …
 
 # ─── Clipboard ───
 # chosen for this machine
@@ -52,7 +56,7 @@ The bound command is **probed, never assumed**, because a hardcoded one fails si
 
 ## Existing Configuration
 
-If `~/.tmux.conf` or `~/.config/tmux/tmux.conf` already exists, the script performs a baseline check (`extended-keys`, `mouse`, `history-limit`, `clipboard`) and compares your file with the recommended baseline for your system:
+If `~/.tmux.conf` or `~/.config/tmux/tmux.conf` already exists, the script performs a baseline check (`mouse`, `history-limit`, `clipboard`; an existing `extended-keys` gets a compatibility note) and compares your file with the recommended baseline for your system:
 
 1. **Exact match**: reports that the file already matches recommended baseline;
 2. **Differences found**: renders a colorized Unified Diff via `git diff`;
@@ -95,4 +99,4 @@ Fully idempotent. Already-installed packages are skipped, existing configuration
 ## Notes
 
 - tmux 3.1+ prefers `$XDG_CONFIG_HOME/tmux/tmux.conf` and falls back to `~/.tmux.conf`. Either one counts as "you already have a config".
-- `set -g extended-keys on` with `csi-u` lets programs like Neovim receive full modifier combinations.
+- `extended-keys`/`csi-u` is **not** in the baseline: applications that never negotiate the kitty keyboard protocol (e.g. Neovim < 0.10) then receive raw sequences like `^[[106;5u` for Ctrl+J/newlines. If every app in your stack speaks CSI-u, opt in manually with `set -g extended-keys on` + `set -g extended-keys-format csi-u`.

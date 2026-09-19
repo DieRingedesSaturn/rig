@@ -28,10 +28,14 @@
 
 ```tmux
 # ─── General ───
-set -g extended-keys on
-set -g extended-keys-format csi-u
+#（extended-keys/csi-u 有意不启用——见下方备注）
+set -as terminal-features ",*:RGB"
+set -g focus-events on
+set -g escape-time 0
 set -g mouse on
 set -g history-limit 100000
+set -g base-index 1
+# 另有 vi copy-mode 绑定、分屏键、状态栏 …
 
 # ─── Clipboard ───
 # 按平台自动选择
@@ -52,7 +56,7 @@ set -g history-limit 100000
 
 ## 已有配置的处理
 
-如果 `~/.tmux.conf` 或 `~/.config/tmux/tmux.conf` 已存在，脚本首先进行逐项关键配置检查（`extended-keys`、`mouse`、`history-limit`、`clipboard`），并比对现有文件与当前环境推荐 Baseline：
+如果 `~/.tmux.conf` 或 `~/.config/tmux/tmux.conf` 已存在，脚本首先进行逐项关键配置检查（`mouse`、`history-limit`、`clipboard`；已存在的 `extended-keys` 会给出兼容性提示），并比对现有文件与当前环境推荐 Baseline：
 
 1. **若配置完全一致**：直接提示匹配，不作任何改动；
 2. **若存在差异**：调用 `git diff` 输出彩色 Unified Diff；
@@ -95,4 +99,4 @@ set -g history-limit 100000
 ## 备注
 
 - tmux 3.1+ 优先读取 `$XDG_CONFIG_HOME/tmux/tmux.conf`，回退到 `~/.tmux.conf`。两者任一存在都算"你已有配置"。
-- `set -g extended-keys on` 配合 `csi-u` 是为了让 Neovim 等程序能收到完整的修饰键组合。
+- `extended-keys`/`csi-u` **不在**基线里：没有协商 kitty 键盘协议的程序（如 Neovim < 0.10）会把 Ctrl+J/换行收到成 `^[[106;5u` 之类的原始转义序列。若你整套应用栈都支持 CSI-u，可手动加 `set -g extended-keys on` + `set -g extended-keys-format csi-u`。
