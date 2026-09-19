@@ -61,6 +61,8 @@
 
 幂等：已存在的规则跳过，不再声明的端口被对账清除，`sshd_config` 每次重新渲染并预检。`--yes` / `--non-interactive` 跳过交互式策略询问。
 
+交互询问涵盖：SSH 访问范围、`PermitRootLogin`、`PasswordAuthentication`、`PubkeyAuthentication`、SSH 端口与额外公网 TCP 端口。若防 lockout 检查报 `PubkeyAuthentication is 'no'`，说明当前 sshd 生效配置禁用了密钥登录——用 `sudo grep -rni pubkeyauthentication /etc/ssh/sshd_config /etc/ssh/sshd_config.d/` 定位该指令，改为 yes 并 reload sshd，先在**新会话**里验证密钥登录可用，再重跑加固关闭密码认证。
+
 ## 依赖
 
 - 需要 `sudo`；只读审计路径使用 `sudo -n`，绝不触发密码提示。

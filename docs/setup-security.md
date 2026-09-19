@@ -61,6 +61,8 @@ The candidate `sshd_config` is rendered into a temporary file and must pass `ssh
 
 Idempotent: existing rules are skipped, undeclared ports are reconciled, and `sshd_config` is re-rendered + re-preflighted each run. `--yes` / `--non-interactive` skips the interactive policy prompt.
 
+The interactive prompt covers: SSH access scope, `PermitRootLogin`, `PasswordAuthentication`, `PubkeyAuthentication`, SSH port, and extra public TCP ports. If the anti-lockout guard reports `PubkeyAuthentication is 'no'`, the live sshd config disables key login — find it with `sudo grep -rni pubkeyauthentication /etc/ssh/sshd_config /etc/ssh/sshd_config.d/`, enable it, verify a key login in a new session, then re-run to disable password auth.
+
 ## Dependencies
 
 - `sudo` required; read-only audit paths use `sudo -n` and never prompt.

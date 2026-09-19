@@ -217,6 +217,9 @@ security_verify_admin_user() {
     pubkey_cfg="$(printf '%s' "$pubkey_cfg" | tr '[:upper:]' '[:lower:]')"
     if [[ "$pubkey_cfg" != "yes" ]]; then
         _security_verify_fail "effective PubkeyAuthentication is '$pubkey_cfg', not 'yes'"
+        echo "  Locate the directive: sudo grep -rni pubkeyauthentication /etc/ssh/sshd_config /etc/ssh/sshd_config.d/" >&2
+        echo "  Safe path: set PubkeyAuthentication yes, reload sshd, verify a key" >&2
+        echo "  login in a NEW session, then re-run hardening to disable password auth." >&2
         return 1
     fi
 

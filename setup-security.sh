@@ -133,6 +133,16 @@ if rig_can_prompt && [[ "${RIG_NON_INTERACTIVE:-0}" -ne 1 ]]; then
         *) echo "  Invalid value; keeping $RIG_SSH_PASSWORD_AUTH." ;;
     esac
 
+    read -rp "PubkeyAuthentication [current: $RIG_SSH_PUBKEY_AUTH; yes/no]: " ans_pub </dev/tty || ans_pub=""
+    case "$ans_pub" in
+        "") ;;
+        yes|no) RIG_SSH_PUBKEY_AUTH="$ans_pub" ;;
+        *) echo "  Invalid value; keeping $RIG_SSH_PUBKEY_AUTH." ;;
+    esac
+    if [[ "$RIG_SSH_PASSWORD_AUTH" == "no" && "$RIG_SSH_PUBKEY_AUTH" == "no" ]]; then
+        echo "  WARNING: disabling both password and public-key auth guarantees lockout."
+    fi
+
     read -rp "SSH Port [default: $RIG_SSH_PORT]: " ans_port </dev/tty || ans_port=""
     if [[ -n "$ans_port" && "$ans_port" =~ ^[0-9]+$ ]]; then
         RIG_SSH_PORT="$ans_port"
