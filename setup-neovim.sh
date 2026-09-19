@@ -310,9 +310,21 @@ end
 -- In SSH or headless environments, use OSC 52 to pass yanks back to the local terminal.
 if not is_remote and vim.fn.executable('wl-copy') == 1 then
   vim.opt.clipboard:append('unnamedplus')
-else
+elseif vim.fn.has('nvim-0.10') == 1 then
   vim.g.clipboard = 'osc52'
   vim.keymap.set('x', 'y', '"+y')
+else
+  -- nvim < 0.10 (e.g. Debian stable) has no osc52 provider; emit the escape to
+  -- /dev/tty on every yank instead. Inside tmux this needs `set-clipboard on`.
+  vim.api.nvim_create_autocmd('TextYankPost', {
+    callback = function()
+      if vim.v.event.operator ~= 'y' then return end
+      local b64 = vim.fn.system('base64', table.concat(vim.v.event.regcontents, '\n')):gsub('%s+', '')
+      if b64 == '' then return end
+      local tty = io.open('/dev/tty', 'w')
+      if tty then tty:write('\27]52;c;' .. b64 .. '\7'); tty:close() end
+    end,
+  })
 end
 
 -- Let Ghostty/Konsole own mouse selection and copy-on-select.

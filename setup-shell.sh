@@ -254,6 +254,14 @@ check_plugin zsh-syntax-highlighting "$SYNTAX_FILE"
 
 if rc_has 'starship init'; then
     echo "  [starship] initialized in .zshrc"
+    # A wired-up line can still be dead code: flag an earlier return/exit and
+    # a binary whose init script fails to render (e.g. wrong arch, broken).
+    if command -v starship >/dev/null 2>&1 && ! starship init zsh >/dev/null 2>&1; then
+        echo "  ⚠ 'starship init zsh' fails to run — the binary may be broken"
+    fi
+    awk -v s="$(rc_line 'starship init')" \
+        'NR < s && /^[[:space:]]*(return|exit)[[:space:]]/ {printf "  ⚠ line %d runs before starship init and may skip it: %s\n", NR, $0}' \
+        "$ZSHRC"
 else
     echo "  [starship] init line NOT present in .zshrc"
     MISSING_ZSHRC+=('eval "$(starship init zsh)"')

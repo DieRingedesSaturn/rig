@@ -24,7 +24,7 @@
 - Leader = `<Space>`；4 空格缩进、`expandtab`、smart/auto indent；`scrolloff=4`；分屏向右/向下。
 - `ignorecase`+`smartcase` 搜索、持久化 undo、无 swap/backup、`<F2>` 切换行号。
 - **配色**：本地（非 SSH）会话在已安装 `site/pack/plugins/start/everforest` 时使用 Everforest，并读取 `NVIM_BACKGROUND` / `~/.local/state/nvim/background`。SSH 会话或未安装时回退到手工映射的 ANSI 调色板方案（关闭 termguicolors，零依赖）。
-- **剪贴板**：本地 Wayland 且有 `wl-copy` 时启用 `unnamedplus`；远程/无头环境使用 OSC 52（可视模式 `"+y` 把复制内容送回本地终端）。
+- **剪贴板**：本地 Wayland 且有 `wl-copy` 时启用 `unnamedplus`；远程/无头环境使用 OSC 52——nvim ≥ 0.10 用内置 provider（可视模式 `"+y`），更老版本（如 Debian 源的 0.7.x）用 `TextYankPost` 回退直接向 `/dev/tty` 写 OSC 52 转义。tmux 内回退需要 `set-clipboard on`（rig 的 tmux 基线已带）。
 - `mouse = ''` —— 选择与复制交给终端模拟器（Ghostty/Konsole 风格）。
 
 ## 创建/修改的文件

@@ -24,7 +24,7 @@ Installs Neovim (ensuring >= 0.9) and writes a dependency-free, terminal-native 
 - Leader = `<Space>`; 4-space tabs, `expandtab`, smart/auto indent; `scrolloff=4`; splits open right/below.
 - `ignorecase`+`smartcase` search, persistent undo, no swap/backup files, `<F2>` toggles line numbers.
 - **Color scheme**: locally (non-SSH) uses the Everforest plugin when installed at `site/pack/plugins/start/everforest`, honoring `NVIM_BACKGROUND` / `~/.local/state/nvim/background`. On SSH sessions or when Everforest is absent, falls back to a hand-mapped ANSI-palette scheme (no termguicolors, zero dependencies).
-- **Clipboard**: local Wayland sessions with `wl-copy` get `unnamedplus`; remote/headless sessions use OSC 52 (`"+y` in visual mode yanks back to the local terminal).
+- **Clipboard**: local Wayland sessions with `wl-copy` get `unnamedplus`; remote/headless sessions use OSC 52 — the built-in provider on nvim ≥ 0.10 (`"+y` in visual mode), or a `TextYankPost` fallback that emits the OSC 52 escape to `/dev/tty` on older versions (e.g. Debian's 0.7.x). Inside tmux the fallback needs `set-clipboard on` (rig's tmux baseline sets it).
 - `mouse = ''` — leaves selection/copy to the terminal emulator (Ghostty/Konsole style).
 
 ## Files Created / Modified
