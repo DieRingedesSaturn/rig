@@ -290,6 +290,12 @@ if ! grep -q 'bindkey -[ev]' "$ZSHRC" 2>/dev/null; then
     MISSING_ZSHRC+=('bindkey -e  # emacs keymap: EDITOR may contain "vi" (nvim)')
 fi
 
+# Pasting a command block that contains '# comments' fails on a stock zsh:
+# without interactive_comments the '#' is parsed as a command/word.
+if ! grep -q 'interactive_comments\|interactivecomments' "$ZSHRC" 2>/dev/null; then
+    MISSING_ZSHRC+=('setopt interactive_comments  # allow # comments when pasting commands')
+fi
+
 # Basic color support: the distro .bashrc in /etc/skel sets these, but a zsh
 # user switching shells loses ls/grep colors entirely. BSD/macOS ls has no
 # --color; it uses CLICOLOR + -G instead.
