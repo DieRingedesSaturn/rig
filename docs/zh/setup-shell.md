@@ -47,6 +47,10 @@
 | 4/5 | 缺失时创建 `~/.config/starship.toml`；已存在则弹出 diff 菜单 |
 | 5/5 | 读取 `~/.zshrc` 并报告：加载了哪些插件、是否有 Starship 初始化行、zsh 是否为登录 Shell，以及加载顺序建议。缺失的初始化行和非 zsh 登录 Shell 可就地通过 `y/N` 询问修复（先备份） |
 
+可就地追加的缺失项还包括：无 `bindkey -e/-v` 时的 `bindkey -e`（防止 `EDITOR` 含 "vi" 时 zsh 悄悄切到 vi 键位导致 Ctrl+A/E 失效）、无 `interactive_comments` 时的 `setopt interactive_comments`（粘贴含 `#` 注释的命令块不会报错）、以及缺 `color=auto`/`CLICOLOR` 时的基础颜色别名（Linux: `dircolors` + `ls`/`ll`/`la`/`grep --color=auto`；macOS: `CLICOLOR=1` + `ls -G`）。
+
+**提示符主题冲突**：若 `.zshrc` 加载了 `promptinit` 主题（Debian 新用户模板自带 `prompt adam1`），它的 precmd 钩子每次重画都会重写 `PROMPT`，即使有 starship init 行也会把 starship 挡住。脚本会检测该冲突并询问是否注释掉主题行（先备份）。注意在文件末尾追加 `prompt off` 没用——`prompt_cleanup` 会连带清掉 starship 的钩子。
+
 ## 探测的插件路径
 
 | 系统 | 搜索路径 |

@@ -95,8 +95,11 @@ Step 5/5 collects every missing piece and shows the full list before asking — 
 | Starship init absent | `eval "$(starship init zsh)"` |
 | no `bindkey -e/-v` anywhere | `bindkey -e` — zsh picks vi mode when `EDITOR` contains "vi" (nvim counts), which breaks Ctrl+A/E |
 | no `color=auto`/`CLICOLOR` | Linux: `eval "$(dircolors -b)"` + `ls`/`ll`/`la`/`grep --color=auto` aliases · macOS: `export CLICOLOR=1` + `ls -G` |
+| no `interactive_comments` | `setopt interactive_comments` — lets `#` start a comment in interactive shells so pasted command blocks with comments don't break |
 
 Each line is only offered when genuinely missing — your own aliases and keymap choices are never overwritten.
+
+**Prompt-theme conflict**: if `.zshrc` loads a `promptinit` theme (`prompt adam1` ships in Debian's newuser template), its precmd hook rewrites `PROMPT` every draw and hides starship even though the init line is present. The script detects this and offers to comment the theme line out (with backup). Note that appending `prompt off` does *not* fix it — `prompt_cleanup` would remove starship's hook too.
 
 ## Dependencies
 

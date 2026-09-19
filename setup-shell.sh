@@ -267,6 +267,19 @@ else
     MISSING_ZSHRC+=('eval "$(starship init zsh)"')
 fi
 
+# A promptinit theme (`prompt adam1` ships in Debian's newuser .zshrc)
+# registers a precmd hook that rewrites PROMPT every draw and wins over
+# starship — appending 'prompt off' does NOT help, because its cleanup also
+# removes starship's hook. The theme line itself must be commented out.
+# Stored as "lineno:content"; handled in the report section.
+ZSHRC_PROMPT_CONFLICT=""
+if rc_has 'starship init'; then
+    ZSHRC_PROMPT_CONFLICT="$(rc_lines 'prompt' \
+        | grep -E ':[[:space:]]*prompt[[:space:]]+[a-zA-Z]' \
+        | grep -vE ':[[:space:]]*prompt[[:space:]]+(off|-[a-zA-Z]+)([[:space:]]|$)' \
+        | head -1 || true)"
+fi
+
 # Advisory: upstream requires zsh-syntax-highlighting to be sourced last,
 # because it wraps the ZLE line editor. Anything sourcing after it can end up
 # bypassing the highlighting widget.
@@ -356,6 +369,27 @@ else
                 echo "      $line"
             done
         fi
+    fi
+fi
+
+if [[ -n "$ZSHRC_PROMPT_CONFLICT" ]]; then
+    cln="${ZSHRC_PROMPT_CONFLICT%%:*}"
+    cline="${ZSHRC_PROMPT_CONFLICT#*:}"
+    echo ""
+    printf "  ⚠ line %s of %s loads a zsh prompt theme that overrides starship:\n" "$cln" "$ZSHRC"
+    echo "      $cline"
+    if rig_can_prompt; then
+        printf "  Comment it out so starship takes over? [y/N] "
+        read -r answer </dev/tty || answer="n"
+        if [[ "$answer" == [yY]* ]]; then
+            rig_user_backup "$ZSHRC" zshrc >/dev/null 2>&1 || true
+            sed -i "${cln}s/^[[:space:]]*/# rig-disabled: /" "$ZSHRC"
+            echo "  ✔ Commented out (backup taken). Takes effect in a new zsh."
+        else
+            echo "  Kept — the prompt theme will keep hiding starship."
+        fi
+    else
+        echo "    Comment out that line to let starship render."
     fi
 fi
 
