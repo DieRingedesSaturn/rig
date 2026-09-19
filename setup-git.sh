@@ -30,7 +30,9 @@ echo "=== Git Setup ==="
 
 # When a terminal is available and nothing is configured yet, ask instead of
 # silently skipping — a git without user.name/user.email cannot commit.
-if rig_can_prompt; then
+# install.sh pre-collects this in the plan phase and marks it asked, so the
+# prompt never stalls the component stage; standalone runs still ask here.
+if rig_can_prompt && [[ -z "${RIG_GIT_IDENTITY_ASKED:-}" && "${RIG_NON_INTERACTIVE:-0}" -eq 0 ]]; then
     if [[ -z "$GIT_USER_NAME" ]] && [[ -z "$(git config --global user.name 2>/dev/null)" ]]; then
         read -rp "  git user.name (blank to skip): " GIT_USER_NAME </dev/tty || GIT_USER_NAME=""
     fi

@@ -765,6 +765,38 @@ show_plan() {
 
 # --- [G] Configuration Collector ----------------------------------------------
 
+# Pre-collect the git identity while we are still in the plan phase, so the
+# git component script never blocks mid-install on its own /dev/tty reads.
+# Exported GIT_USER_NAME/GIT_USER_EMAIL flow into setup-git.sh; the sentinel
+# tells it the question was already asked even when the user left it blank.
+collect_git_identity() {
+    local git_idx=""
+    for i in "${!COMP_IDS[@]}"; do
+        [[ "${COMP_IDS[$i]}" == "git" ]] && git_idx=$i && break
+    done
+    [[ -n "$git_idx" && "${COMP_SELECTED[$git_idx]}" -eq 1 ]] || return 0
+    [[ -n "${GIT_USER_NAME:-}" && -n "${GIT_USER_EMAIL:-}" ]] && return 0
+
+    local cur_name cur_email
+    cur_name="$(git config --global user.name 2>/dev/null || true)"
+    cur_email="$(git config --global user.email 2>/dev/null || true)"
+    [[ -n "$cur_name" && -n "$cur_email" ]] && return 0
+
+    printf "  ${BOLD}${SYM_KEY} Git identity${NC} ${DIM}(blank skips — configure later)${NC}\n"
+    if [[ -z "$cur_name" && -z "${GIT_USER_NAME:-}" ]]; then
+        printf "  ${DIM}user.name:${NC} "
+        read -r GIT_USER_NAME </dev/tty || GIT_USER_NAME=""
+        export GIT_USER_NAME
+    fi
+    if [[ -z "$cur_email" && -z "${GIT_USER_EMAIL:-}" ]]; then
+        printf "  ${DIM}user.email:${NC} "
+        read -r GIT_USER_EMAIL </dev/tty || GIT_USER_EMAIL=""
+        export GIT_USER_EMAIL
+    fi
+    export RIG_GIT_IDENTITY_ASKED=1
+    printf "\n"
+}
+
 get_env_names() {
     local idx=$1
     case "${COMP_IDS[$idx]}" in
@@ -1358,6 +1390,7 @@ main() {
     apply_config_components
 
     # Determine interactive mode
+    export RIG_NON_INTERACTIVE="$NON_INTERACTIVE"
     if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
         if [[ -e /dev/tty ]]; then
             INTERACTIVE=1
@@ -1446,6 +1479,7 @@ main() {
     # Collect API keys (components stay selected even without keys — install only)
     if [[ "$INTERACTIVE" -eq 1 ]]; then
         collect_api_keys
+        collect_git_identity
     else
         validate_api_keys
     fi
