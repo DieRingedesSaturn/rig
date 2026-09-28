@@ -38,6 +38,8 @@ ZSHRC="$HOME/.zshrc"
 STARSHIP_TOML="$HOME/.config/starship.toml"
 MISSING_ZSHRC=()
 NOT_INSTALLED=()
+ZSHRC_STARSHIP_REWRITE=""
+ZSHRC_PROMPT_CONFLICT=""
 
 echo "=== Shell Environment Setup (lightweight) ==="
 echo "  platform: $OS_DISTRO ($OS_FAMILY, $PKG_MANAGER)"
@@ -235,6 +237,19 @@ rc_lines() {
 rc_has()  { [[ -f "$ZSHRC" ]] && [[ -n "$(rc_lines "$1")" ]]; }
 rc_line() { rc_lines "$1" | head -1 | cut -d: -f1; }
 
+# Resolve starship to an absolute path for the init line: the init may run
+# before a PATH export later in .zshrc, so a bare 'starship' word fails when
+# the binary lives in ~/.local/bin (upstream fallback) or anywhere custom.
+STARSHIP_BIN="$(command -v starship 2>/dev/null || true)"
+[[ -z "$STARSHIP_BIN" && -x "$HOME/.local/bin/starship" ]] && STARSHIP_BIN="$HOME/.local/bin/starship"
+
+# ~/.local/bin must be on PATH for user-level installs (upstream starship,
+# the rig CLI). Debian only adds it via ~/.profile, which a non-login zsh
+# never reads — so export it explicitly here when the rc lacks it.
+if [[ -d "$HOME/.local/bin" ]] && ! grep -q '\.local/bin' "$ZSHRC" 2>/dev/null; then
+    MISSING_ZSHRC+=('export PATH="$HOME/.local/bin:$PATH"')
+fi
+
 check_plugin() {
     local name="$1" file="$2"
     if [[ -z "$file" ]]; then
@@ -256,15 +271,34 @@ if rc_has 'starship init'; then
     echo "  [starship] initialized in .zshrc"
     # A wired-up line can still be dead code: flag an earlier return/exit and
     # a binary whose init script fails to render (e.g. wrong arch, broken).
-    if command -v starship >/dev/null 2>&1 && ! starship init zsh >/dev/null 2>&1; then
+    if [[ -n "$STARSHIP_BIN" ]] && ! "$STARSHIP_BIN" init zsh >/dev/null 2>&1; then
         echo "  ⚠ 'starship init zsh' fails to run — the binary may be broken"
     fi
     awk -v s="$(rc_line 'starship init')" \
         'NR < s && /^[[:space:]]*(return|exit)[[:space:]]/ {printf "  ⚠ line %d runs before starship init and may skip it: %s\n", NR, $0}' \
         "$ZSHRC"
+    # A bare `starship` word fails at startup when the binary lives outside
+    # the system dirs and no earlier line extends PATH — e.g. upstream
+    # installer dropped it in ~/.local/bin while .zshrc never adds it.
+    init_ln="$(rc_line 'starship init')"
+    if [[ -n "$init_ln" && -n "$STARSHIP_BIN" ]]; then
+        case "$STARSHIP_BIN" in
+            /bin/*|/sbin/*|/usr/bin/*|/usr/sbin/*|/usr/local/bin/*|/opt/homebrew/bin/*) ;;
+            *)  bin_dir="${STARSHIP_BIN%/*}"
+                if ! awk -v s="$init_ln" 'NR < s && /PATH/' "$ZSHRC" | grep -qF "$bin_dir"; then
+                    ZSHRC_STARSHIP_REWRITE="$init_ln"
+                    echo "  ⚠ init line calls bare 'starship' but it lives at $STARSHIP_BIN and no earlier line puts $bin_dir on PATH — it fails at every shell start"
+                fi
+                ;;
+        esac
+    fi
 else
     echo "  [starship] init line NOT present in .zshrc"
-    MISSING_ZSHRC+=('eval "$(starship init zsh)"')
+    if [[ -n "$STARSHIP_BIN" ]]; then
+        MISSING_ZSHRC+=("eval \"\$($STARSHIP_BIN init zsh)\"")
+    else
+        MISSING_ZSHRC+=('eval "$(starship init zsh)"')
+    fi
 fi
 
 # A promptinit theme (`prompt adam1` ships in Debian's newuser .zshrc)
@@ -272,7 +306,6 @@ fi
 # starship — appending 'prompt off' does NOT help, because its cleanup also
 # removes starship's hook. The theme line itself must be commented out.
 # Stored as "lineno:content"; handled in the report section.
-ZSHRC_PROMPT_CONFLICT=""
 if rc_has 'starship init'; then
     ZSHRC_PROMPT_CONFLICT="$(rc_lines 'prompt' \
         | grep -E ':[[:space:]]*prompt[[:space:]]+[a-zA-Z]' \
@@ -369,6 +402,24 @@ else
                 echo "      $line"
             done
         fi
+    fi
+fi
+
+if [[ -n "$ZSHRC_STARSHIP_REWRITE" ]]; then
+    echo ""
+    echo "  ⚠ line $ZSHRC_STARSHIP_REWRITE calls bare 'starship' before PATH covers it."
+    if rig_can_prompt; then
+        printf "  Rewrite it to the absolute path %s? [y/N] " "$STARSHIP_BIN"
+        read -r answer </dev/tty || answer="n"
+        if [[ "$answer" == [yY]* ]]; then
+            rig_user_backup "$ZSHRC" zshrc >/dev/null 2>&1 || true
+            sed -i "${ZSHRC_STARSHIP_REWRITE}s|starship init|${STARSHIP_BIN} init|" "$ZSHRC"
+            echo "  ✔ Rewritten (backup taken)."
+        else
+            echo "  Kept — the line will keep printing 'command not found'."
+        fi
+    else
+        echo "    Edit it to use $STARSHIP_BIN explicitly."
     fi
 fi
 

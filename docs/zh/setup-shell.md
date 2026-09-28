@@ -51,6 +51,8 @@
 
 **提示符主题冲突**：若 `.zshrc` 加载了 `promptinit` 主题（Debian 新用户模板自带 `prompt adam1`），它的 precmd 钩子每次重画都会重写 `PROMPT`，即使有 starship init 行也会把 starship 挡住。脚本会检测该冲突并询问是否注释掉主题行（先备份）。注意在文件末尾追加 `prompt off` 没用——`prompt_cleanup` 会连带清掉 starship 的钩子。
 
+**裸 `starship` 早于 PATH**：若已有 init 行调用裸 `starship`，而二进制在系统目录之外（如上游安装器落的 `~/.local/bin`）、且此前没有 PATH 导出行，则每次开 shell 都会报 `command not found: starship`。脚本会检测并询问是否把该行改写为解析后的绝对路径（先备份）。新追加的 init 行一律使用绝对路径；当 `.zshrc` 缺少 `~/.local/bin` PATH 导出时也会一并追加 `export PATH="$HOME/.local/bin:$PATH"`（rig CLI 同样需要它）。
+
 ## 探测的插件路径
 
 | 系统 | 搜索路径 |
