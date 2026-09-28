@@ -795,6 +795,21 @@ print_security_report() {
         fi
     fi
 
+    # Hostname resolution — sudo warns ("unable to resolve host") and slows
+    # down when NSS can't resolve the machine's own hostname. Cloud images
+    # often leave the generated hostname out of /etc/hosts.
+    if command -v getent >/dev/null 2>&1; then
+        local hostn
+        hostn="$(hostname 2>/dev/null || true)"
+        if [[ -z "$hostn" ]]; then
+            :
+        elif getent hosts "$hostn" >/dev/null 2>&1; then
+            printf "  ${GREEN}✔${NC} %-22s %s\n" "Hostname" "$hostn (resolvable)"
+        else
+            printf "  ${YELLOW}⚠${NC} %-22s %s\n" "Hostname" "$hostn does not resolve — sudo warnings. Fix: echo '127.0.1.1 $hostn' | sudo tee -a /etc/hosts"
+        fi
+    fi
+
     printf "\n  ${BOLD}${WHITE}Listening Ports Audit${NC}\n"
     printf "  ${DIM}────────────────────────────────────────────────────────────${NC}\n"
     local tcp_allow udp_allow warn_undeclared ssh_access ssh_port
