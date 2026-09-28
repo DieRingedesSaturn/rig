@@ -325,6 +325,9 @@ else
       if tty then tty:write('\27]52;c;' .. b64 .. '\7'); tty:close() end
     end,
   })
+  -- '"+y' would still error (the + register needs a provider) — remap it to a
+  -- plain yank so muscle memory works; the autocmd pushes it via OSC 52.
+  vim.keymap.set({ 'n', 'x' }, '"+y', 'y', { remap = true })
 end
 
 -- Let Ghostty/Konsole own mouse selection and copy-on-select.
