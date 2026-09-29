@@ -75,7 +75,8 @@ elif is_debian; then
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
         | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
     sudo apt-get update -qq
-    sudo apt-get install -y -qq gh
+    sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l \
+        APT_LISTCHANGES_FRONTEND=none apt-get install -y -qq gh
 elif is_fedora || is_rhel; then
     sudo dnf install -y 'dnf-command(config-manager)' 2>/dev/null || true
     # dnf5 (Fedora 41+) uses different syntax than dnf4
@@ -132,8 +133,8 @@ if ! ff_works; then
             ff_asset="fastfetch-${ff_os}-${ff_arch}${ff_variant}"
             if is_debian; then
                 if curl -fsSL --retry 2 "$ff_base/${ff_asset}.deb" -o "$ff_tmp/ff.deb" 2>/dev/null \
-                    && { sudo dpkg -i "$ff_tmp/ff.deb" 2>/dev/null \
-                        || sudo apt-get install -f -y 2>/dev/null; }; then
+                    && { sudo env DEBIAN_FRONTEND=noninteractive dpkg -i "$ff_tmp/ff.deb" 2>/dev/null \
+                        || sudo env DEBIAN_FRONTEND=noninteractive apt-get install -f -y 2>/dev/null; }; then
                     echo "  installed via ${ff_asset}.deb"
                 fi
             elif command -v dnf &>/dev/null; then

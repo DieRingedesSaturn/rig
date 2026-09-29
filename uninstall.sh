@@ -561,11 +561,12 @@ uninstall_containers() {
             # Packages, in both modes.
             case "$PKG_MANAGER" in
                 apt)
-                    sudo apt-get remove -y \
+                    sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l \
+                        apt-get remove -y \
                         docker-ce docker-ce-cli containerd.io \
                         docker-ce-rootless-extras \
                         docker-compose-plugin docker-buildx-plugin 2>/dev/null || true
-                    sudo apt-get autoremove -y 2>/dev/null || true
+                    sudo env DEBIAN_FRONTEND=noninteractive apt-get autoremove -y 2>/dev/null || true
                     ;;
                 dnf)
                     sudo dnf remove -y \
@@ -632,8 +633,8 @@ uninstall_tailscale() {
 
         case "$PKG_MANAGER" in
             apt)
-                sudo apt-get remove -y tailscale 2>/dev/null || true
-                sudo apt-get autoremove -y 2>/dev/null || true
+                sudo env DEBIAN_FRONTEND=noninteractive apt-get remove -y tailscale 2>/dev/null || true
+                sudo env DEBIAN_FRONTEND=noninteractive apt-get autoremove -y 2>/dev/null || true
                 ;;
             dnf)
                 sudo dnf remove -y tailscale 2>/dev/null || true
@@ -1180,11 +1181,11 @@ main() {
     done
 
     # Check dependencies
-    local blocked=0
+    local blocked_count=0
     for idx in "${ordered[@]}"; do
-        check_dependents "$idx" || ((blocked++))
+        check_dependents "$idx" || ((blocked_count++))
     done
-    if [[ $blocked -gt 0 && "$FORCE" -eq 0 ]]; then
+    if [[ $blocked_count -gt 0 && "$FORCE" -eq 0 ]]; then
         printf "\n  ${RED}${BOLD}Uninstall blocked.${NC} ${DIM}Resolve dependencies or use --force.${NC}\n\n"
         exit 1
     fi

@@ -99,8 +99,19 @@ pkg_install() {
     # shellcheck disable=SC2086
     case "$PKG_MANAGER" in
         apt)
+            # -y alone does not cover every prompt apt can emit:
+            #   needrestart asks which services to restart (TUI/read),
+            #   dpkg asks about conffile collisions (e.g. sshd_config),
+            #   apt-listchanges may page NEWS files.
+            # All three block until a keypress — invisible under a spinner and
+            # stuck on EOF under curl|bash. env(1) carries the vars past sudo's
+            # env_reset; --force-confold keeps the user's config on upgrades.
             _sudo_if_needed apt-get update -qq
-            _sudo_if_needed apt-get install -y -qq $mapped
+            _sudo_if_needed env DEBIAN_FRONTEND=noninteractive \
+                NEEDRESTART_MODE=l APT_LISTCHANGES_FRONTEND=none \
+                apt-get install -y -qq \
+                -o Dpkg::Options::=--force-confdef \
+                -o Dpkg::Options::=--force-confold $mapped
             ;;
         dnf)
             _sudo_if_needed dnf install -y $mapped
@@ -166,7 +177,11 @@ pkg_update() {
         case "$PKG_MANAGER" in
             apt)
                 _sudo_if_needed apt-get update -qq
-                _sudo_if_needed apt-get install --only-upgrade -y -qq $mapped
+                _sudo_if_needed env DEBIAN_FRONTEND=noninteractive \
+                    NEEDRESTART_MODE=l APT_LISTCHANGES_FRONTEND=none \
+                    apt-get install --only-upgrade -y -qq \
+                    -o Dpkg::Options::=--force-confdef \
+                    -o Dpkg::Options::=--force-confold $mapped
                 ;;
             dnf)
                 _sudo_if_needed dnf upgrade -y $mapped
@@ -210,7 +225,8 @@ pkg_remove() {
     # shellcheck disable=SC2086
     case "$PKG_MANAGER" in
         apt)
-            _sudo_if_needed apt-get remove -y -qq $mapped
+            _sudo_if_needed env DEBIAN_FRONTEND=noninteractive \
+                NEEDRESTART_MODE=l apt-get remove -y -qq $mapped
             ;;
         dnf)
             _sudo_if_needed dnf remove -y $mapped
@@ -298,7 +314,9 @@ pkg_add_repo() {
             if [[ "$repo_info" == ppa:* ]]; then
                 # PPA format
                 if ! command -v add-apt-repository &>/dev/null; then
-                    _sudo_if_needed apt-get install -y -qq software-properties-common
+                    _sudo_if_needed env DEBIAN_FRONTEND=noninteractive \
+                        NEEDRESTART_MODE=l APT_LISTCHANGES_FRONTEND=none \
+                        apt-get install -y -qq software-properties-common
                 fi
                 _sudo_if_needed add-apt-repository -y "$repo_info"
             else

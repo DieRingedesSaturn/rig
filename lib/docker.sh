@@ -57,7 +57,11 @@ _docker_install_engine() {
         return 0
     fi
     echo "  installing Docker Engine via get.docker.com..."
-    curl -fsSL https://get.docker.com | sudo sh
+    # env(1) carries the noninteractive flags through sudo's env_reset into the
+    # upstream script's own apt-get/dpkg calls (needrestart, conffile prompts).
+    curl -fsSL https://get.docker.com | \
+        sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l \
+            APT_LISTCHANGES_FRONTEND=none sh
     if ! command -v docker >/dev/null 2>&1; then
         echo "Error: docker is still not available after installation." >&2
         exit 1
