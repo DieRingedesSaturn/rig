@@ -237,8 +237,27 @@ fi
 
 echo ""
 if [[ -n "$NPM_REGISTRY" ]]; then
-    echo "  npm registry -> $NPM_REGISTRY (writing ~/.npmrc)"
-    npm config set registry "$NPM_REGISTRY"
+    _cur_registry="$(npm config get registry 2>/dev/null || true)"
+    # The npmjs default is equivalent to "unset"; a *custom* existing registry
+    # is a deliberate choice and needs an explicit yes before we overwrite it.
+    if [[ -z "$_cur_registry" || "$_cur_registry" == "$NPM_REGISTRY" \
+        || "$_cur_registry" == "https://registry.npmjs.org/" ]]; then
+        npm config set registry "$NPM_REGISTRY"
+        echo "  npm registry -> $NPM_REGISTRY (wrote ~/.npmrc)"
+    elif rig_can_prompt 2>/dev/null; then
+        printf "  ~/.npmrc already sets registry=%s. Replace with %s? [y/N] " \
+            "$_cur_registry" "$NPM_REGISTRY"
+        read -r answer </dev/tty || answer="n"
+        if [[ "$answer" == [yY]* ]]; then
+            [[ -f "$HOME/.npmrc" ]] && rig_user_backup "$HOME/.npmrc" ".npmrc" >/dev/null 2>&1 || true
+            npm config set registry "$NPM_REGISTRY"
+            echo "  npm registry -> $NPM_REGISTRY (backup taken)"
+        else
+            echo "  Kept existing registry $_cur_registry."
+        fi
+    else
+        echo "  Keeping existing registry $_cur_registry (set NPM_REGISTRY interactively to override)."
+    fi
 else
     echo "  npm registry: $(npm config get registry 2>/dev/null || echo 'default') (set NPM_REGISTRY to change)"
 fi

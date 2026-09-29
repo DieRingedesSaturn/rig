@@ -387,7 +387,8 @@ security_get_sshd_param() {
         # Debian-family installs, which would silently turn every lookup into
         # the default value.
         if [[ "$(uname -s 2>/dev/null)" == "Linux" && ! -d /run/sshd ]]; then
-            sudo mkdir -p /run/sshd 2>/dev/null || mkdir -p /run/sshd 2>/dev/null || true
+            # sudo -n: read-only callers (status/doctor) must never prompt.
+            sudo -n mkdir -p /run/sshd 2>/dev/null || mkdir -p /run/sshd 2>/dev/null || true
         fi
         local t_val=""
         t_val="$("$sshd_bin" -T 2>/dev/null | grep -i "^${param} " | head -1 | awk '{print $2}' || true)"

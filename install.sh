@@ -956,6 +956,14 @@ run_component() {
         # `curl | bash` stdin is a pipe, so -t 0 cannot detect interactivity.
         case "${COMP_IDS[$idx]}" in
             shell|git|neovim|tmux|containers|security|node|uv) needs_visible_tty=1 ;;
+            # tools prompts via /dev/tty only when fastfetch is unpackaged
+            # (Debian ≤12, Ubuntu <25.04); behind the spinner the prompt is
+            # invisible and the read deadlocks the install.
+            tools)
+                command -v fastfetch >/dev/null 2>&1 \
+                    || [[ -x "$HOME/.local/bin/fastfetch" ]] \
+                    || needs_visible_tty=1
+                ;;
         esac
     fi
 
@@ -1072,7 +1080,7 @@ run_all_selected() {
                     printf "  ${DIM}•${NC} SSH port changed to ${CYAN}%s${NC} — reconnect with ${CYAN}ssh -p %s${NC}\n" "$SSH_PORT" "$SSH_PORT"
                 fi
                 if [[ -n "${SSH_PUBKEY:-}" ]]; then
-                    printf "  ${DIM}•${NC} Password auth ${RED}disabled${NC} — verify your key works before closing this session\n"
+                    printf "  ${DIM}•${NC} Public key added — verify key login works in a new session ${DIM}(password auth unchanged; the security component manages it)${NC}\n"
                 fi
                 ;;
             shell)
@@ -1392,7 +1400,10 @@ main() {
     # Determine interactive mode
     export RIG_NON_INTERACTIVE="$NON_INTERACTIVE"
     if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
-        if [[ -e /dev/tty ]]; then
+        # /dev/tty exists as a device node even with no controlling terminal
+        # (ssh -T, cron), so test that it opens — otherwise every read fails,
+        # menus auto-confirm, and the run proceeds unattended.
+        if rig_can_prompt; then
             INTERACTIVE=1
         else
             echo "Error: No terminal available. Use --all or --components to specify what to install."

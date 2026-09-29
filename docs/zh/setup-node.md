@@ -45,7 +45,7 @@ nvm 适用于所有支持的平台（Linux 和 macOS）。无需操作系统特�
 |------|--------|------|
 | `NODE_VERSION` | `24` | 要安装的 Node.js 主版本号（也可作为第一个参数传入） |
 | `NVM_NODEJS_ORG_MIRROR` | _（空）_ | Node.js 二进制下载镜像。设置 `GH_PROXY` 时自动使用 `https://npmmirror.com/mirrors/node`。 |
-| `NPM_REGISTRY` | _（空）_ | npm registry 地址。设置 `GH_PROXY` 时自动使用 `https://registry.npmmirror.com`。 |
+| `NPM_REGISTRY` | _（空）_ | npm registry 地址。设置 `GH_PROXY` 时自动使用 `https://registry.npmmirror.com`。仅在当前 registry 未设置/为默认值时写入——已有自定义 registry 会保留，交互模式下可确认替换（非交互运行一律保留）。 |
 
 ## 重复运行行为
 

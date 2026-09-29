@@ -239,7 +239,7 @@ Only installed components are shown; all are selected by default.
 Options:
   --all                  Update all installed components
   --components LIST      Comma-separated component list:
-                         shell,tmux,git,tools,node,uv,containers,tailscale,ssh
+                         shell,tmux,git,tools,neovim,node,uv,containers,tailscale,ssh,security
   --gh-proxy URL         GitHub proxy URL (e.g., https://gh-proxy.org)
   -v, --verbose          Show raw command output (default: clean spinner)
   -h, --help             Show this help
@@ -904,7 +904,9 @@ main() {
 
     # Determine interactive mode
     if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
-        if [[ -e /dev/tty ]]; then
+        # /dev/tty exists as a device node even with no controlling terminal
+        # (ssh -T, cron); test that it opens instead.
+        if rig_can_prompt; then
             INTERACTIVE=1
         else
             echo "Error: No terminal available. Use --all or --components to specify what to update."

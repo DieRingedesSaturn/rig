@@ -187,8 +187,10 @@ detect_tmux() {
 
         if [[ -n "$conf" ]]; then
             # Comment lines are ignored so a commented-out entry is not counted.
+            # extended-keys is deliberately absent: the baseline omits CSI-u
+            # negotiation because pre-0.10 Neovim cannot parse it.
             local rc_lines wanted missing=0
-            for wanted in 'extended-keys' 'mouse' 'history-limit'; do
+            for wanted in 'mouse' 'history-limit'; do
                 rc_lines="$(grep -n "$wanted" "$conf" 2>/dev/null | grep -v ':[[:space:]]*#' || true)"
                 [[ -n "$rc_lines" ]] || missing=1
             done

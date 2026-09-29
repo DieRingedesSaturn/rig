@@ -45,7 +45,7 @@ nvm works on all supported platforms (Linux and macOS). No OS-specific package m
 |----------|---------|-------------|
 | `NODE_VERSION` | `24` | Node.js major version to install (also accepted as first argument) |
 | `NVM_NODEJS_ORG_MIRROR` | _(empty)_ | Mirror for Node.js binary downloads. Auto-set to `https://npmmirror.com/mirrors/node` when `GH_PROXY` is set. |
-| `NPM_REGISTRY` | _(empty)_ | npm registry URL. Auto-set to `https://registry.npmmirror.com` when `GH_PROXY` is set. |
+| `NPM_REGISTRY` | _(empty)_ | npm registry URL. Auto-set to `https://registry.npmmirror.com` when `GH_PROXY` is set. Written only when the current registry is unset/default — a custom existing registry is kept unless confirmed (non-interactive runs always keep it). |
 
 ## Re-run Behavior
 

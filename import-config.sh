@@ -29,6 +29,9 @@ else
     # Minimal fallback
     is_debian() { [[ -f /etc/debian_version ]]; }
     is_macos() { [[ "$(uname -s)" == "Darwin" ]]; }
+    # /dev/tty exists as a device node even with no controlling terminal; it
+    # must be opened to prove the process can actually prompt.
+    rig_can_prompt() { (exec 3<>/dev/tty) 2>/dev/null; }
     PKG_MANAGER="apt"
     command -v dnf &>/dev/null && PKG_MANAGER="dnf"
     command -v brew &>/dev/null && PKG_MANAGER="brew"
@@ -291,7 +294,7 @@ printf "\n"
 # --- Confirm -----------------------------------------------------------------
 
 if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
-    if [[ -e /dev/tty ]]; then
+    if rig_can_prompt; then
         printf "  ${BOLD}Proceed with import?${NC} ${DIM}[Y/n]${NC} "
         read -r confirm </dev/tty
         if [[ "$confirm" =~ ^[Nn] ]]; then

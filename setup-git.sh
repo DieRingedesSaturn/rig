@@ -57,16 +57,25 @@ else
     echo "  Skipped user.email (GIT_USER_EMAIL not set)."
 fi
 
-# [2/2] Sensible defaults
+# [2/2] Sensible defaults — fill in only what is unset; an existing value the
+# user chose deliberately always wins over the baseline.
 echo "[2/2] Setting defaults..."
-git config --global init.defaultBranch main
-git config --global pull.rebase true
-git config --global push.autoSetupRemote true
-git config --global core.autocrlf input
-echo "  init.defaultBranch = main"
-echo "  pull.rebase = true"
-echo "  push.autoSetupRemote = true"
-echo "  core.autocrlf = input"
+_git_default() {
+    local key="$1" val="$2" cur
+    cur="$(git config --global "$key" 2>/dev/null || true)"
+    if [[ -z "$cur" ]]; then
+        git config --global "$key" "$val"
+        echo "  $key = $val"
+    elif [[ "$cur" == "$val" ]]; then
+        echo "  $key = $cur (already set)"
+    else
+        echo "  $key = $cur (kept; baseline suggests $val)"
+    fi
+}
+_git_default init.defaultBranch main
+_git_default pull.rebase true
+_git_default push.autoSetupRemote true
+_git_default core.autocrlf input
 
 echo ""
 echo "=== Done! ==="
