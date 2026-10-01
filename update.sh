@@ -343,19 +343,22 @@ get_version() {
 
 update_shell() {
     # Everything this component installs comes from the distro package manager.
-    pkg_update zsh starship zsh-autosuggestions zsh-syntax-highlighting 2>/dev/null || true
+    pkg_update zsh starship zsh-autosuggestions zsh-syntax-highlighting || return 1
 
     # Starship installed from upstream (on distros that don't package it) lives
     # in ~/.local/bin and is updated by re-running its own installer.
     if ! pkg_check_installed starship 2>/dev/null && [[ -x "$HOME/.local/bin/starship" ]]; then
-        sh -c "$(curl -fsSL https://starship.rs/install.sh)" -- -y -b "$HOME/.local/bin" 2>/dev/null || true
+        local installer
+        installer="$(curl -fsSL https://starship.rs/install.sh)" || return 1
+        [[ -n "$installer" ]] || return 1
+        sh -c "$installer" -- -y -b "$HOME/.local/bin" || return 1
     fi
 }
 
 update_tmux() {
     # The component installs nothing outside the package manager, so this is the
     # whole update. No plugins or theme to pull.
-    pkg_update tmux 2>/dev/null || true
+    pkg_update tmux || return 1
 
     # Legacy: a TPM install left by an older version of this script.
     if [[ -x "$HOME/.tmux/plugins/tpm/bin/update_plugins" ]]; then
@@ -364,12 +367,12 @@ update_tmux() {
 }
 
 update_git() {
-    pkg_update git 2>/dev/null || true
+    pkg_update git || return 1
 }
 
 update_tools() {
-    pkg_update ripgrep jq fd bat tree shellcheck build-tools wget unzip xclip fastfetch 2>/dev/null || true
-    pkg_update gh 2>/dev/null || true
+    pkg_update ripgrep jq fd bat tree shellcheck build-tools wget unzip xclip fastfetch || return 1
+    pkg_update gh || return 1
 }
 
 update_node() {
@@ -379,7 +382,7 @@ update_node() {
     fi
 
     local current
-    current=$(nvm current 2>/dev/null)
+    current=$(nvm current 2>/dev/null) || return 1
     [[ -z "$current" || "$current" == "none" || "$current" == "system" ]] && return 0
 
     local target
@@ -392,7 +395,7 @@ update_node() {
     fi
 
     local latest
-    latest=$(nvm version-remote "$target" 2>/dev/null)
+    latest=$(nvm version-remote "$target" 2>/dev/null) || return 1
 
     if [[ -z "$latest" || "$latest" == "N/A" ]]; then
         echo "Could not resolve latest version for Node.js $target"
@@ -404,12 +407,12 @@ update_node() {
         return 0
     fi
 
-    nvm install "$target" --reinstall-packages-from="$current"
+    nvm install "$target" --reinstall-packages-from="$current" || return 1
     nvm alias default "$target"
 }
 
 update_uv() {
-    uv self update 2>/dev/null || true
+    uv self update || return 1
 }
 
 update_containers() {
@@ -420,25 +423,22 @@ update_containers() {
     case "$engine" in
         podman)
             # Daemonless: upgrading the package is the whole update.
-            pkg_update podman 2>/dev/null || true
-            if is_macos; then
-                brew upgrade podman 2>/dev/null || true
-            fi
+            pkg_update podman || return 1
             ;;
         docker)
             if is_macos; then
-                brew upgrade --cask docker 2>/dev/null || true
+                brew upgrade --cask docker || return 1
             else
                 if [[ "$mode" == "rootless" ]]; then
                     # docker-ce-rootless-extras carries dockerd-rootless-setuptool.sh
                     pkg_update docker-ce docker-ce-cli containerd.io \
                         docker-buildx-plugin docker-compose-plugin \
-                        docker-ce-rootless-extras 2>/dev/null || true
-                    systemctl --user restart docker 2>/dev/null || true
+                        docker-ce-rootless-extras || return 1
+                    systemctl --user restart docker || return 1
                 else
                     pkg_update docker-ce docker-ce-cli containerd.io \
-                        docker-buildx-plugin docker-compose-plugin 2>/dev/null || true
-                    sudo systemctl restart docker 2>/dev/null || true
+                        docker-buildx-plugin docker-compose-plugin || return 1
+                    sudo systemctl restart docker || return 1
                 fi
             fi
             ;;
@@ -448,10 +448,10 @@ update_containers() {
 update_tailscale() {
     if command -v tailscale &>/dev/null; then
         if is_macos; then
-            brew upgrade --cask tailscale 2>/dev/null || true
+            brew upgrade --cask tailscale || return 1
         else
             sudo tailscale update 2>/dev/null || {
-                pkg_update tailscale 2>/dev/null || true
+                pkg_update tailscale || return 1
             }
         fi
     fi
@@ -459,9 +459,9 @@ update_tailscale() {
 
 update_neovim() {
     if is_macos; then
-        brew upgrade neovim 2>/dev/null || true
+        brew upgrade neovim || return 1
     else
-        pkg_update neovim 2>/dev/null || true
+        pkg_update neovim || return 1
     fi
 }
 
@@ -519,7 +519,7 @@ update_ssh() {
         # macOS SSH is part of the OS; no package to upgrade
         return 0
     fi
-    pkg_update openssh-server 2>/dev/null || true
+    pkg_update openssh-server || return 1
 }
 
 run_update() {

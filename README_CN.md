@@ -31,7 +31,7 @@ Linux 和 macOS 自动化配置与轻量级 VPS 主机状态管理器 (Personal 
 4. **安全底线与非侵入约束 (Safety Guarantees)**
    - **绝不盲目覆盖用户配置**：若 `~/.zshrc`、`~/.config/starship.toml`、`~/.config/nvim` 已经存在，脚本仅做只读检查，绝不强制覆写；`setup-tmux.sh` 则提供彩色 Unified Diff 比对与交互式决策（支持保留原有 [Keep]、备份后覆盖 [Overwrite] 或追加 [Append]），杜绝任何暴力覆盖；
    - **防失联硬性门禁 (Anti-Lockout)**：若未检测到具备 sudo 权限且拥有可用 SSH Key 的非 root 管理员，**程序硬性拒绝禁用 root 和密码登录**；
-   - **数据资产防误删**：卸载时默认保护 `~/.nvm`（防止多版本 Node 与全局 npm 包丢失）及 `~/.ssh/` 密钥。
+   - **数据资产防误删**：卸载时默认保护 `~/.nvm`（防止多版本 Node 与全局 npm 包丢失）及 `~/.ssh/` 密钥，`--yes` / `--force` 同样保留；仅显式使用 `--remove-node-data` 才删除 nvm 数据。
 
 ## 支持的操作系统
 

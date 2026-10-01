@@ -288,7 +288,7 @@ Answering `N` (the default) removes the Docker packages but preserves data on di
 
 ### Force Mode
 
-The `--force` flag bypasses dependency checks but still performs config backups and data prompts:
+The `--force` flag bypasses dependency checks and prompts while preserving data by default. Node versions and global npm packages remain in `~/.nvm`; use `--remove-node-data` to delete that tree explicitly (`--keep-node-versions` retains it):
 
 ```bash
 rig uninstall node --force    # Remove Node.js even if dependents exist

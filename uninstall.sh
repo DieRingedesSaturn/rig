@@ -45,7 +45,7 @@ YES_FLAG=0
 # Default to preserving data — require explicit flags to remove
 DOCKER_REMOVE_DATA=0
 SSH_REMOVE_KEYS=0
-NODE_KEEP_VERSIONS=0
+NODE_KEEP_VERSIONS=1
 
 # --- [B] ANSI Colors ---------------------------------------------------------
 
@@ -226,13 +226,14 @@ Options:
   --yes                  Auto-confirm prompts (required for headless/no-TTY operation)
   --remove-docker-data   Remove Docker volumes and images at /var/lib/docker
   --remove-ssh-keys      Remove SSH keys in ~/.ssh/
-  --keep-node-versions   Keep ~/.nvm (all Node versions + global npm packages)
+  --remove-node-data     Remove ~/.nvm (all Node versions + global npm packages)
+  --keep-node-versions   Keep ~/.nvm (default; overrides --remove-node-data)
   --list                 List installed components and exit
   -v, --verbose          Show raw command output
   -h, --help             Show this help
 
 Data Safety:
-  By default, destructive data (Docker volumes, SSH keys) is preserved during
+  By default, destructive data (Docker volumes, SSH keys, nvm versions) is preserved during
   uninstall. Use the --remove-* flags above to opt in to data removal. The
   --force flag skips prompts but does NOT auto-remove data.
 
@@ -330,7 +331,7 @@ collect_confirmations() {
                 printf "  ${BOLD}Remove $HOME/.nvm?${NC} ${DIM}[y/N]${NC} "
                 local ans; read -r ans </dev/tty
                 # Declining is the safe direction: keep the data.
-                [[ "$ans" =~ ^[Yy] ]] || NODE_KEEP_VERSIONS=1
+                if [[ "$ans" =~ ^[Yy] ]]; then NODE_KEEP_VERSIONS=0; else NODE_KEEP_VERSIONS=1; fi
                 ;;
         esac
     done
@@ -446,7 +447,7 @@ uninstall_node() {
         echo "  global npm packages live inside those versions and go with them."
 
         if [[ "$NODE_KEEP_VERSIONS" -eq 1 ]]; then
-            echo "  Kept $HOME/.nvm (removal declined)."
+            echo "  Kept $HOME/.nvm (data preservation enabled)."
         else
             rm -rf "$HOME/.nvm"
             echo "  Removed $HOME/.nvm ($count version(s))."
@@ -1049,6 +1050,8 @@ parse_args() {
                 SSH_REMOVE_KEYS=1; shift ;;
             --keep-node-versions)
                 NODE_KEEP_VERSIONS=1; shift ;;
+            --remove-node-data)
+                NODE_KEEP_VERSIONS=0; shift ;;
             --list)
                 setup_colors; load_env; detect_installed
                 printf "\n  ${BOLD}Installed components:${NC}\n"; hr

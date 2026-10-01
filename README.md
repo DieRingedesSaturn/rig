@@ -31,7 +31,7 @@ Automated baseline manager and lightweight VPS state manager for Linux and macOS
 4. **Safety Guarantees & Non-Invasive Constraints**
    - **Zero Unprompted Overwrites**: Existing files such as `~/.zshrc`, `~/.tmux.conf`, `~/.config/starship.toml`, and `~/.config/nvim` are never overwritten; missing snippets are reported as a checklist;
    - **Anti-Lockout Gate**: Strictly refuses to disable root SSH login or password authentication unless a non-root admin user with verified `sudo` rights and working SSH public key is present;
-   - **Data Preservation**: The uninstaller preserves `~/.nvm` (protecting all installed Node versions and global packages) and `~/.ssh/` keys by default.
+   - **Data Preservation**: The uninstaller preserves `~/.nvm` (protecting all installed Node versions and global packages) and `~/.ssh/` keys by default, including under `--yes` / `--force`. Deleting nvm data requires `--remove-node-data`.
 
 ## Supported Operating Systems
 

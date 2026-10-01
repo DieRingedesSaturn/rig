@@ -96,12 +96,23 @@ setup_colors() {
 
 # JSON-escape a string value
 json_escape() {
-    local s="$1"
-    s="${s//\\/\\\\}"
-    s="${s//\"/\\\"}"
-    s="${s//$'\n'/\\n}"
-    s="${s//$'\t'/\\t}"
-    printf '%s' "$s"
+    local s="$1" out="" char escaped code i
+    local LC_ALL=C
+    for ((i=0; i<${#s}; i++)); do
+        char="${s:i:1}"
+        case "$char" in
+            '"') out+='\"' ;;
+            '\') out+='\\' ;;
+            *)
+                printf -v code '%d' "'$char"
+                if [[ "$code" -lt 32 ]]; then
+                    printf -v escaped '\\u%04x' "$code"
+                    out+="$escaped"
+                else out+="$char"; fi
+                ;;
+        esac
+    done
+    printf '%s' "$out"
 }
 
 # Print a JSON key-value pair (string)
@@ -187,43 +198,43 @@ detect_installed() {
 # --- Extract Non-Sensitive Config --------------------------------------------
 
 extract_config() {
-    local json="{\n"
-    json+='  "_comment": "Non-sensitive config exported by Rig. Node versions, container engine/mirrors, and model fields are informational only and not imported.",\n'
-    json+='  "rig_version": "0.1.0",\n'
-    json+="  \"exported_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\n"
+    local json=$'{\n'
+    json+=$'  "_comment": "Non-sensitive config exported by Rig. Node versions, container engine/mirrors, and model fields are informational only and not imported.",\n'
+    json+=$'  "rig_version": "0.1.0",\n'
+    json+="  \"exported_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\","$'\n'
 
     # Installed components list
     local comps
     comps=$(detect_installed)
-    json+='  "components": ['
+    json+=$'  "components": ['
     local first=1
     while IFS= read -r comp; do
         [[ -z "$comp" ]] && continue
-        [[ $first -eq 0 ]] && json+=', '
+        [[ $first -eq 0 ]] && json+=$', '
         json+="\"$comp\""
         first=0
     done <<< "$comps"
-    json+="],\n"
+    json+=$'],\n'
 
     # Config section
-    json+='  "config": {\n'
+    json+=$'  "config": {\n'
 
     # Git
     local git_name git_email
     git_name=$(git config --global user.name 2>/dev/null || true)
     git_email=$(git config --global user.email 2>/dev/null || true)
-    json+='    "git": {\n'
+    json+=$'    "git": {\n'
     json+="$(json_kv "user_name" "${git_name}")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "user_email" "${git_email}")"
-    json+='\n    },\n'
+    json+=$'\n    },\n'
 
     # Node (informational only)
     local node_version="N/A"
     command -v node &>/dev/null && node_version=$(node --version 2>/dev/null | sed 's/^v//')
-    json+='    "node": {\n'
+    json+=$'    "node": {\n'
     json+="$(json_kv "version" "$node_version")"
-    json+='\n    },\n'
+    json+=$'\n    },\n'
 
     # Containers (informational only). The backend and mode come from the rig
     # config, and each backend keeps its registry mirrors in a different place:
@@ -274,17 +285,17 @@ extract_config() {
         container_mode="$(rig_config_get RIG_CONTAINER_MODE "$container_mode")"
     fi
 
-    json+='    "containers": {\n'
+    json+=$'    "containers": {\n'
     json+="$(json_kv "engine" "$engine")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "mode" "$container_mode")"
-    json+=',\n'
+    json+=$',\n'
     if [[ -n "$mirrors" ]]; then
         json+="    $mirrors"
     else
-        json+='    "registry-mirrors": []'
+        json+=$'    "registry-mirrors": []'
     fi
-    json+='\n    },\n'
+    json+=$'\n    },\n'
 
     # System & Security baseline
     local rig_profile firewall public_tcp public_udp ssh_port
@@ -323,42 +334,42 @@ extract_config() {
         warn_undeclared_ports="$(rig_config_get RIG_WARN_UNDECLARED_PORTS "$warn_undeclared_ports")"
     fi
 
-    json+='    "system": {\n'
+    json+=$'    "system": {\n'
     json+="$(json_kv "profile" "$rig_profile")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "container_mode" "$container_mode")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "firewall" "$firewall")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "firewall_default_in" "$fw_default_in")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "firewall_default_out" "$fw_default_out")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "public_tcp" "$public_tcp")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "public_udp" "$public_udp")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "ssh_port" "$ssh_port")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "ssh_root_login" "$ssh_root_login")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "ssh_password_auth" "$ssh_password_auth")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "ssh_pubkey_auth" "$ssh_pubkey_auth")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "ssh_access" "$ssh_access")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "admin_user" "$admin_user")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "check_listening_ports" "$check_listening_ports")"
-    json+=',\n'
+    json+=$',\n'
     json+="$(json_kv "warn_undeclared_ports" "$warn_undeclared_ports")"
-    json+='\n    }\n'
+    json+=$'\n    }\n'
 
-    json+='  }\n'
-    json+='}'
+    json+=$'  }\n'
+    json+=$'}'
 
-    printf '%b' "$json"
+    printf '%s' "$json"
 }
 
 # --- Extract Secrets ---------------------------------------------------------

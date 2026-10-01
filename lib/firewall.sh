@@ -98,6 +98,148 @@ _firewall_ro_cmd() {
     sudo -n "$@" 2>/dev/null
 }
 
+# All mutations share one mode for an apply. Never start a stopped daemon just
+# to edit permanent configuration: prepare it with the offline client first.
+firewall_prepare() {
+    local backend="$1"
+    FIREWALL_OFFLINE=0
+    [[ "$backend" == firewalld ]] || return 0
+    if ! sudo firewall-cmd --state >/dev/null 2>&1; then
+        command -v firewall-offline-cmd >/dev/null 2>&1 || {
+            echo "firewall-offline-cmd is required before starting firewalld" >&2
+            return 1
+        }
+        FIREWALL_OFFLINE=1
+    fi
+}
+
+_firewall_config_cmd() {
+    if [[ "${FIREWALL_OFFLINE:-0}" -eq 1 ]]; then
+        sudo firewall-offline-cmd "$@"
+    else
+        sudo firewall-cmd --permanent "$@"
+    fi
+}
+
+firewall_validate_bindings() {
+    local zone interfaces sources zones runtime_zones
+    zones="$(_firewall_config_cmd --get-zones)" || return 1
+    for zone in $zones; do
+        case "$zone" in public|rig-tailscale|docker|libvirt) continue ;; esac
+        interfaces="$(_firewall_config_cmd --zone="$zone" --list-interfaces)" || return 1
+        sources="$(_firewall_config_cmd --zone="$zone" --list-sources)" || return 1
+        if [[ -n "$interfaces$sources" ]]; then
+            echo "Unmanaged firewalld zone '$zone' has interface/source bindings; configure their policy before applying Rig." >&2
+            return 1
+        fi
+    done
+    # Runtime-only bindings must not escape the same preflight.
+    if [[ "${FIREWALL_OFFLINE:-0}" -eq 0 ]]; then
+        runtime_zones="$(sudo firewall-cmd --get-zones)" || return 1
+        for zone in $runtime_zones; do
+            case "$zone" in public|rig-tailscale|docker|libvirt) continue ;; esac
+            interfaces="$(sudo firewall-cmd --zone="$zone" --list-interfaces)" || return 1
+            sources="$(sudo firewall-cmd --zone="$zone" --list-sources)" || return 1
+            [[ -z "$interfaces$sources" ]] || {
+                echo "Unmanaged runtime zone '$zone' has interface/source bindings" >&2
+                return 1
+            }
+        done
+    fi
+}
+
+# Snapshots are kept in the centralized user-owned backup tree. Capture both
+# permanent and runtime firewalld settings: they need not be identical.
+firewall_snapshot() {
+    local backend="$1" dir="$2" active=0 enabled=0
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+    case "$backend" in
+        ufw)
+            if command -v ufw >/dev/null 2>&1; then
+                local status
+                status="$(sudo ufw status)" || return 1
+                [[ "$status" != *'Status: active'* ]] || active=1
+            fi
+            _firewall_save_path /etc/ufw "$dir/ufw" || return 1
+            _firewall_save_path /etc/default/ufw "$dir/ufw-default" || return 1
+            ;;
+        firewalld)
+            sudo systemctl is-active --quiet firewalld && active=1
+            sudo systemctl is-enabled --quiet firewalld && enabled=1
+            _firewall_save_path /etc/firewalld "$dir/permanent" || return 1
+            if [[ "$active" -eq 1 ]]; then
+                # Export the runtime XML, then immediately restore the original
+                # disk configuration without reloading the running daemon.
+                local capture_rc=0
+                sudo firewall-cmd --runtime-to-permanent >/dev/null || capture_rc=1
+                if [[ "$capture_rc" -eq 0 ]]; then
+                    _firewall_save_path /etc/firewalld "$dir/runtime" || capture_rc=1
+                fi
+                _firewall_restore_path "$dir/permanent" /etc/firewalld || return 1
+                [[ "$capture_rc" -eq 0 ]] || return 1
+            fi
+            ;;
+        *) return 1 ;;
+    esac
+    printf '%s\n%s\n%s\n' "$backend" "$active" "$enabled" > "$dir/state"
+    sudo chown -R "$(id -u):$(id -g)" "$dir" || return 1
+}
+
+_firewall_save_path() {
+    local path="$1" dest="$2"
+    if sudo test -e "$path"; then
+        sudo cp -a "$path" "$dest" || return 1
+    else
+        : > "$dest.absent"
+    fi
+}
+
+_firewall_restore_path() {
+    local source="$1" path="$2"
+    # Only the known firewall config paths may be replaced by this helper.
+    case "$path" in /etc/ufw|/etc/default/ufw|/etc/firewalld) ;; *) return 1 ;; esac
+    if [[ ! -e "$source" && ! -f "$source.absent" ]]; then return 1; fi
+    sudo rm -rf "$path" || return 1
+    if [[ -e "$source" ]]; then sudo cp -a "$source" "$path" || return 1; fi
+}
+
+firewall_restore() {
+    local backend="$1" dir="$2" saved active enabled failed=0
+    [[ -f "$dir/state" ]] || return 1
+    { read -r saved; read -r active; read -r enabled; } < "$dir/state"
+    [[ "$saved" == "$backend" && "$active" =~ ^[01]$ && "$enabled" =~ ^[01]$ ]] || return 1
+    case "$backend" in
+        ufw)
+            _firewall_restore_path "$dir/ufw" /etc/ufw || return 1
+            _firewall_restore_path "$dir/ufw-default" /etc/default/ufw || return 1
+            if [[ "$active" -eq 1 ]]; then
+                sudo ufw --force enable || failed=1
+                sudo ufw reload || failed=1
+            elif command -v ufw >/dev/null 2>&1; then
+                sudo ufw --force disable || failed=1
+            fi
+            ;;
+        firewalld)
+            if [[ "$active" -eq 1 ]]; then
+                _firewall_restore_path "$dir/runtime" /etc/firewalld || return 1
+                sudo systemctl start firewalld || failed=1
+                sudo firewall-cmd --reload || failed=1
+                # Leave the original permanent settings on disk, retaining the
+                # restored runtime settings until the next user-requested reload.
+                _firewall_restore_path "$dir/permanent" /etc/firewalld || failed=1
+            else
+                sudo systemctl stop firewalld || failed=1
+                _firewall_restore_path "$dir/permanent" /etc/firewalld || failed=1
+            fi
+            if [[ "$enabled" -eq 1 ]]; then sudo systemctl enable firewalld || failed=1
+            else sudo systemctl disable firewalld || failed=1; fi
+            ;;
+        *) return 1 ;;
+    esac
+    [[ "$failed" -eq 0 ]]
+}
+
 # firewall_is_active - Check if the firewall service is actively filtering.
 # Read-only callers (status, audits) use sudo -n so they never block on a
 # password prompt; an unreadable backend reports as inactive.
@@ -152,20 +294,26 @@ firewall_set_defaults() {
                 echo "Error: firewalld backend does not support RIG_FIREWALL_DEFAULT_OUT=$default_out" >&2
                 return 1
             fi
-            sudo firewall-cmd --set-default-zone=public >/dev/null || return 1
+            if [[ "${FIREWALL_OFFLINE:-0}" -eq 1 ]]; then
+                sudo firewall-offline-cmd --set-default-zone=public >/dev/null || return 1
+            else
+                # Switch only after prepared public rules are loaded by reload.
+                FIREWALL_DEFAULT_PENDING=public
+            fi
             if [[ "$default_in" == "deny" ]]; then
-                sudo firewall-cmd --permanent --zone=public --set-target=DROP >/dev/null || return 1
+                _firewall_config_cmd --zone=public --set-target=DROP >/dev/null || return 1
                 # A DROP target is silently bypassed by service entries shipped
                 # in the stock public zone (ssh, cockpit, ...). Strip them so
                 # only explicitly declared ports stay reachable. dhcpv6-client
                 # is kept: removing it breaks DHCPv6 on networks that need it.
-                local svc
-                for svc in $(sudo firewall-cmd --permanent --zone=public --list-services 2>/dev/null); do
+                local svc services
+                services="$(_firewall_config_cmd --zone=public --list-services)" || return 1
+                for svc in $services; do
                     [[ "$svc" == "dhcpv6-client" ]] && continue
-                    sudo firewall-cmd --permanent --zone=public --remove-service="$svc" >/dev/null || true
+                    _firewall_config_cmd --zone=public --remove-service="$svc" >/dev/null || return 1
                 done
             else
-                sudo firewall-cmd --permanent --zone=public --set-target=default >/dev/null || return 1
+                _firewall_config_cmd --zone=public --set-target=ACCEPT >/dev/null || return 1
             fi
             ;;
     esac
@@ -197,15 +345,16 @@ firewall_allow_port() {
                 fi
                 # Move tailscale0 into a dedicated deny-by-default zone so only
                 # explicitly allowed services are reachable over that interface.
-                if ! sudo firewall-cmd --permanent --get-zones 2>/dev/null | tr ' ' '\n' | grep -qx 'rig-tailscale'; then
-                    sudo firewall-cmd --permanent --new-zone=rig-tailscale >/dev/null || return 1
-                    sudo firewall-cmd --reload >/dev/null || return 1
+                local zones
+                zones="$(_firewall_config_cmd --get-zones)" || return 1
+                if ! printf '%s\n' "$zones" | tr ' ' '\n' | grep -qx 'rig-tailscale'; then
+                    _firewall_config_cmd --new-zone=rig-tailscale >/dev/null || return 1
                 fi
-                sudo firewall-cmd --permanent --zone=rig-tailscale --set-target=DROP >/dev/null || return 1
-                sudo firewall-cmd --permanent --zone=rig-tailscale --change-interface=tailscale0 >/dev/null || return 1
-                sudo firewall-cmd --permanent --zone=rig-tailscale --add-port="${port}/${proto}" >/dev/null || return 1
+                _firewall_config_cmd --zone=rig-tailscale --set-target=DROP >/dev/null || return 1
+                _firewall_config_cmd --zone=rig-tailscale --change-interface=tailscale0 >/dev/null || return 1
+                _firewall_config_cmd --zone=rig-tailscale --add-port="${port}/${proto}" >/dev/null || return 1
             else
-                sudo firewall-cmd --permanent --add-port="${port}/${proto}" >/dev/null || return 1
+                _firewall_config_cmd --zone=public --add-port="${port}/${proto}" >/dev/null || return 1
             fi
             ;;
     esac
@@ -216,17 +365,24 @@ firewall_allow_port() {
 firewall_remove_public_port() {
     local backend="$1"
     local port="$2"
-    local proto="${3:-tcp}"
+    local proto="${3:-tcp}" status rc
 
     case "$backend" in
         ufw)
-            if sudo ufw status 2>/dev/null | awk -v rule="${port}/${proto}" '$1 == rule && $2 == "ALLOW" { found=1 } END { exit !found }'; then
+            status="$(sudo ufw status)" || return 1
+            if printf '%s\n' "$status" | awk -v rule="${port}/${proto}" '
+                $1 == rule && (($2 == "ALLOW" && $3 == "Anywhere") || ($2 == "(v6)" && $3 == "ALLOW" && $4 == "Anywhere")) { found=1 }
+                END { exit !found }
+            '; then
                 sudo ufw --force delete allow "${port}/${proto}" >/dev/null || return 1
             fi
             ;;
         firewalld)
-            if sudo firewall-cmd --permanent --zone=public --query-port="${port}/${proto}" >/dev/null 2>&1; then
-                sudo firewall-cmd --permanent --zone=public --remove-port="${port}/${proto}" >/dev/null || return 1
+            if _firewall_config_cmd --zone=public --query-port="${port}/${proto}" >/dev/null 2>&1; then
+                _firewall_config_cmd --zone=public --remove-port="${port}/${proto}" >/dev/null || return 1
+            else
+                rc=$?
+                [[ "$rc" -eq 1 ]] || return "$rc"
             fi
             ;;
         *)
@@ -237,6 +393,30 @@ firewall_remove_public_port() {
 }
 
 # firewall_enable - Enable and activate firewall
+firewall_remove_interface_port() {
+    local backend="$1" port="$2" proto="$3" iface="$4" rc status
+    case "$backend" in
+        ufw)
+            status="$(sudo ufw status)" || return 1
+            if printf '%s\n' "$status" | awk -v port="$port/$proto" -v iface="$iface" '
+                $1 == port && $2 == "on" && $3 == iface && /ALLOW/ { found=1 }
+                END { exit !found }
+            '; then
+                sudo ufw --force delete allow in on "$iface" to any port "$port" proto "$proto" >/dev/null || return 1
+            fi
+            ;;
+        firewalld)
+            if _firewall_config_cmd --zone=rig-tailscale --query-port="$port/$proto" >/dev/null 2>&1; then
+                _firewall_config_cmd --zone=rig-tailscale --remove-port="$port/$proto" >/dev/null
+            else
+                rc=$?
+                [[ "$rc" -eq 1 ]] || return "$rc"
+            fi
+            ;;
+        *) return 1 ;;
+    esac
+}
+
 firewall_enable() {
     local backend="$1"
     case "$backend" in
@@ -248,6 +428,11 @@ firewall_enable() {
             echo "  Activating firewalld..."
             sudo systemctl enable --now firewalld >/dev/null || return 1
             sudo firewall-cmd --reload >/dev/null || return 1
+            FIREWALL_OFFLINE=0
+            if [[ -n "${FIREWALL_DEFAULT_PENDING:-}" ]]; then
+                sudo firewall-cmd --set-default-zone="$FIREWALL_DEFAULT_PENDING" >/dev/null || return 1
+                FIREWALL_DEFAULT_PENDING=""
+            fi
             ;;
     esac
 }
@@ -261,6 +446,10 @@ firewall_reload() {
             ;;
         firewalld)
             sudo firewall-cmd --reload >/dev/null || return 1
+            if [[ -n "${FIREWALL_DEFAULT_PENDING:-}" ]]; then
+                sudo firewall-cmd --set-default-zone="$FIREWALL_DEFAULT_PENDING" >/dev/null || return 1
+                FIREWALL_DEFAULT_PENDING=""
+            fi
             ;;
     esac
 }

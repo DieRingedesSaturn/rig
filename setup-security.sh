@@ -52,7 +52,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Resolve Configuration
-CURRENT_SSH_PORT="$(security_get_sshd_param Port 22)"
+CURRENT_SSH_PORTS="$(security_get_sshd_param Port 22)"
+read -r CURRENT_SSH_PORT _ <<< "$CURRENT_SSH_PORTS"
+if [[ -n "${SSH_CONNECTION:-}" ]]; then
+    CURRENT_SSH_PORTS+=" ${SSH_CONNECTION##* }"
+fi
+CURRENT_SSH_PORTS="$(printf '%s\n' "$CURRENT_SSH_PORTS" | tr ' ' '\n' | awk 'NF && !seen[$0]++' | paste -sd ' ' -)"
+PREVIOUS_SSH_ACCESS="$( (unset RIG_SSH_ACCESS; rig_config_get RIG_SSH_ACCESS public))"
 RIG_ADMIN_USER="$(rig_config_get RIG_ADMIN_USER "${SUDO_USER:-$(whoami)}")"
 RIG_SSH_PORT="$(rig_config_get RIG_SSH_PORT "$CURRENT_SSH_PORT")"
 RIG_SSH_ROOT_LOGIN="$(rig_config_get RIG_SSH_ROOT_LOGIN "no")"
@@ -65,9 +71,9 @@ RIG_FIREWALL_DEFAULT_IN="$(rig_config_get RIG_FIREWALL_DEFAULT_IN "deny")"
 RIG_FIREWALL_DEFAULT_OUT="$(rig_config_get RIG_FIREWALL_DEFAULT_OUT "allow")"
 
 RIG_PUBLIC_TCP="$(rig_config_get RIG_PUBLIC_TCP "$RIG_SSH_PORT")"
-PREVIOUS_PUBLIC_TCP="$RIG_PUBLIC_TCP"
+PREVIOUS_PUBLIC_TCP="$( (unset RIG_PUBLIC_TCP; rig_config_get RIG_PUBLIC_TCP ''))"
 RIG_PUBLIC_UDP="$(rig_config_get RIG_PUBLIC_UDP "")"
-PREVIOUS_PUBLIC_UDP="$RIG_PUBLIC_UDP"
+PREVIOUS_PUBLIC_UDP="$( (unset RIG_PUBLIC_UDP; rig_config_get RIG_PUBLIC_UDP ''))"
 RIG_CHECK_LISTENING_PORTS="$(rig_config_get RIG_CHECK_LISTENING_PORTS "yes")"
 RIG_WARN_UNDECLARED_PORTS="$(rig_config_get RIG_WARN_UNDECLARED_PORTS "yes")"
 
@@ -76,7 +82,7 @@ csv_without_port() {
     local kept=""
     local -a entries=()
     IFS=',' read -r -a entries <<< "$csv"
-    for item in "${entries[@]}"; do
+    for item in "${entries[@]+"${entries[@]}"}"; do
         item="$(printf '%s' "$item" | tr -d ' ')"
         [[ -z "$item" || "$item" == "$excluded" ]] && continue
         if [[ -n "$kept" ]]; then kept="$kept,$item"; else kept="$item"; fi
@@ -94,7 +100,7 @@ csv_has_port() {
     local csv="$1" wanted="$2" item
     local -a entries=()
     IFS=',' read -r -a entries <<< "$csv"
-    for item in "${entries[@]}"; do
+    for item in "${entries[@]+"${entries[@]}"}"; do
         item="$(printf '%s' "$item" | tr -d ' ')"
         [[ "$item" == "$wanted" ]] && return 0
     done
@@ -195,7 +201,7 @@ validate_port_list() {
     local csv="$1" label="$2" item
     local -a items=()
     IFS=',' read -r -a items <<< "$csv"
-    for item in "${items[@]}"; do
+    for item in "${items[@]+"${items[@]}"}"; do
         item="$(printf '%s' "$item" | tr -d ' ')"
         [[ -z "$item" ]] && continue
         case "$item" in *[!0-9]*) echo "Invalid port in $label: $item" >&2; return 1 ;; esac
@@ -207,52 +213,80 @@ validate_port_list() {
 }
 validate_port_list "$RIG_PUBLIC_TCP" RIG_PUBLIC_TCP
 validate_port_list "$RIG_PUBLIC_UDP" RIG_PUBLIC_UDP
+if [[ "$RIG_SSH_ACCESS" == public ]]; then
+    RIG_PUBLIC_TCP="$(csv_prepend_unique "$RIG_SSH_PORT" "$RIG_PUBLIC_TCP")"
+else
+    RIG_PUBLIC_TCP="$(csv_without_port "$RIG_PUBLIC_TCP" "$RIG_SSH_PORT")"
+fi
 
 echo "=== System Security & Baseline Hardening ==="
 
 # --- [1/5] Anti-lockout Protection Check -------------------------------------
 echo "[1/5] Verifying anti-lockout safety constraints..."
 
+if [[ "$RIG_SSH_PASSWORD_AUTH" == no && "$RIG_SSH_PUBKEY_AUTH" == no ]]; then
+    echo "ERROR: refusing to disable both password and public-key authentication" >&2
+    exit 1
+fi
 LOCKOUT_RISK=0
-if [[ "$RIG_SSH_ROOT_LOGIN" == "no" || "$RIG_SSH_PASSWORD_AUTH" == "no" ]]; then
+if [[ "$RIG_SSH_ROOT_LOGIN" != yes || "$RIG_SSH_PASSWORD_AUTH" == no ]]; then
     LOCKOUT_RISK=1
 fi
 
-if [[ $LOCKOUT_RISK -eq 1 ]]; then
-    if [[ "$RIG_ADMIN_USER" == "root" ]]; then
-        printf "  ${RED}Error: Cannot harden SSH when RIG_ADMIN_USER is root!${NC}\n" >&2
-        echo "  You must designate a non-root admin user with sudo privileges and an SSH key." >&2
-        exit 1
-    fi
-
-    if ! security_verify_admin_user "$RIG_ADMIN_USER"; then
-        printf "  ${RED}FATAL: Anti-lockout guard blocked hardening.${NC}\n" >&2
-        echo "  The specific failing check is printed above. Until it is fixed, disabling" >&2
-        echo "  root login or password auth could lock you out — refusing to proceed." >&2
-        echo "  Common fixes: add '$RIG_ADMIN_USER' to the sudo/wheel group, install a" >&2
-        echo "  public key into its authorized_keys, or fix permissions on ~ and ~/.ssh." >&2
-        exit 1
-    fi
-    printf "  ${GREEN}✔ Anti-lockout check passed:${NC} Admin user '%s' verified (sudo + SSH key active).\n" "$RIG_ADMIN_USER"
-else
-    echo "  Anti-lockout check skipped (root/password login not being disabled)."
-fi
-
-# Build and validate the complete candidate before touching the firewall or
-# active sshd configuration. Match blocks are preserved verbatim.
 SSHD_CONFIG="/etc/ssh/sshd_config"
 SSHD_CANDIDATE=""
-if [[ -f "$SSHD_CONFIG" ]]; then
-    SSHD_CANDIDATE="$(mktemp)"
-    trap '[[ -n "${SSHD_CANDIDATE:-}" ]] && rm -f "$SSHD_CANDIDATE"' EXIT
-    security_render_sshd_config "$SSHD_CONFIG" "$SSHD_CANDIDATE" \
-        "$RIG_SSH_PORT" "$RIG_SSH_ROOT_LOGIN" \
-        "$RIG_SSH_PASSWORD_AUTH" "$RIG_SSH_PUBKEY_AUTH"
-    if ! security_test_sshd_config "$SSHD_CANDIDATE"; then
-        printf "  ${RED}ERROR: candidate sshd configuration failed preflight; no system changes were made.${NC}\n" >&2
+BACKUP_CONFIG=""
+FIREWALL_SNAPSHOT=""
+FW_CHANGED=0
+SSH_CHANGED=0
+SSH_WAS_RUNNING=0
+security_sshd_is_running && SSH_WAS_RUNNING=1
+POLICY_COMMITTED=0
+security_cleanup() {
+    local rc=$? rollback_failed=0
+    trap - EXIT
+    if [[ "$POLICY_COMMITTED" -eq 0 && ( "$FW_CHANGED" -eq 1 || "$SSH_CHANGED" -eq 1 ) ]]; then
+        [[ "$rc" -ne 0 ]] || rc=1
+        echo "Security apply failed; restoring SSH and firewall state..." >&2
+        if [[ "$SSH_CHANGED" -eq 1 ]]; then
+            sudo cp "$BACKUP_CONFIG" "$SSHD_CONFIG" || rollback_failed=1
+        fi
+        if [[ "$FW_CHANGED" -eq 1 ]]; then
+            firewall_restore "$FW_BACKEND" "$FIREWALL_SNAPSHOT" || rollback_failed=1
+        fi
+        if [[ "$SSH_CHANGED" -eq 1 ]]; then
+            if [[ "$SSH_WAS_RUNNING" -eq 1 ]]; then
+                security_test_sshd_config && security_reload_sshd || rollback_failed=1
+            else
+                security_stop_sshd || rollback_failed=1
+            fi
+        fi
+        if [[ "$rollback_failed" -eq 1 ]]; then
+            echo "ERROR: rollback incomplete; inspect SSH backup $BACKUP_CONFIG and firewall snapshot $FIREWALL_SNAPSHOT" >&2
+        else
+            echo "Previous SSH configuration and firewall state restored." >&2
+        fi
+    fi
+    [[ -z "$SSHD_CANDIDATE" ]] || rm -f "$SSHD_CANDIDATE"
+    [[ -z "${POLICY_TMP:-}" ]] || rm -f "$POLICY_TMP"
+    exit "$rc"
+}
+trap security_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+[[ -f "$SSHD_CONFIG" ]] || { echo "ERROR: sshd_config not found; refusing firewall changes" >&2; exit 1; }
+SSHD_CANDIDATE="$(mktemp)"
+security_render_sshd_config "$SSHD_CONFIG" "$SSHD_CANDIDATE" \
+    "$RIG_SSH_PORT" "$RIG_SSH_ROOT_LOGIN" "$RIG_SSH_PASSWORD_AUTH" "$RIG_SSH_PUBKEY_AUTH"
+security_test_sshd_config "$SSHD_CANDIDATE" || { echo "ERROR: candidate failed syntax preflight" >&2; exit 1; }
+if [[ "$LOCKOUT_RISK" -eq 1 ]]; then
+    ADMIN_CONTEXT="$(security_sshd_context "$RIG_ADMIN_USER" "$RIG_SSH_PORT")"
+    if ! security_verify_admin_user "$RIG_ADMIN_USER" "$SSHD_CANDIDATE" "$ADMIN_CONTEXT"; then
+        echo "FATAL: candidate configuration does not provide a verified admin key-login path; no firewall changes made" >&2
         exit 1
     fi
-    printf "  ${GREEN}✔ Candidate sshd configuration passed syntax preflight.${NC}\n"
+    echo "  ✔ Candidate admin key authentication verified. Keep this session open until a NEW login succeeds."
 fi
 
 # --- [2/5] Firewall Provisioning ---------------------------------------------
@@ -283,11 +317,24 @@ else
         exit 1
     fi
     echo "  Firewall backend: $FW_BACKEND"
+    mkdir -p "$RIG_SYSTEM_BACKUP_DIR"
+    chmod 700 "$RIG_BACKUP_DIR" "$RIG_SYSTEM_BACKUP_DIR"
+    FIREWALL_SNAPSHOT="$(mktemp -d "$RIG_SYSTEM_BACKUP_DIR/firewall-security.XXXXXXXX")"
+    firewall_snapshot "$FW_BACKEND" "$FIREWALL_SNAPSHOT"
+    FW_CHANGED=1
     firewall_ensure_installed "$FW_BACKEND"
-    # firewall-cmd cannot write permanent rules until the daemon is running.
-    if [[ "$FW_BACKEND" == "firewalld" ]]; then
-        firewall_enable "$FW_BACKEND"
-    fi
+    firewall_prepare "$FW_BACKEND"
+    if [[ "$FW_BACKEND" == firewalld ]]; then firewall_validate_bindings; fi
+
+    # Protect all existing SSH listeners during the transition, including the
+    # port used by the current session (socket activation may differ from -T).
+    for p in $CURRENT_SSH_PORTS; do
+        if [[ "$PREVIOUS_SSH_ACCESS" == tailscale ]]; then
+            firewall_allow_port "$FW_BACKEND" "$p" tcp tailscale0
+        else
+            firewall_allow_port "$FW_BACKEND" "$p" tcp
+        fi
+    done
 
     # Always ensure SSH port is opened first to prevent lockout
     if [[ "$RIG_SSH_ACCESS" == "tailscale" ]]; then
@@ -300,7 +347,7 @@ else
 
     # Allow declared public TCP ports (skip SSH port if restricted to Tailscale)
     IFS=',' read -r -a tcp_ports <<< "$RIG_PUBLIC_TCP"
-    for p in "${tcp_ports[@]}"; do
+    for p in "${tcp_ports[@]+"${tcp_ports[@]}"}"; do
         p="$(echo "$p" | tr -d ' ')"
         [[ -z "$p" ]] && continue
         if [[ "$RIG_SSH_ACCESS" == "tailscale" && "$p" == "$RIG_SSH_PORT" ]]; then
@@ -312,7 +359,7 @@ else
 
     # Allow declared public UDP ports
     IFS=',' read -r -a udp_ports <<< "$RIG_PUBLIC_UDP"
-    for p in "${udp_ports[@]}"; do
+    for p in "${udp_ports[@]+"${udp_ports[@]}"}"; do
         p="$(echo "$p" | tr -d ' ')"
         [[ -z "$p" ]] && continue
         firewall_allow_port "$FW_BACKEND" "$p" "udp"
@@ -320,11 +367,7 @@ else
 
     # Set default policies and activate
     firewall_set_defaults "$FW_BACKEND" "$RIG_FIREWALL_DEFAULT_IN" "$RIG_FIREWALL_DEFAULT_OUT"
-    if [[ "$FW_BACKEND" == "ufw" ]]; then
-        firewall_enable "$FW_BACKEND"
-    else
-        firewall_reload "$FW_BACKEND"
-    fi
+    firewall_enable "$FW_BACKEND"
     printf "  ${GREEN}✔ Firewall configured and enabled.${NC}\n"
 fi
 
@@ -332,68 +375,21 @@ fi
 echo ""
 echo "[3/5] Hardening OpenSSH server..."
 
-if [[ -f "$SSHD_CONFIG" ]]; then
-    rig_system_backup_once "$SSHD_CONFIG" pre-rig >/dev/null
-    BACKUP_CONFIG="$(rig_system_backup "$SSHD_CONFIG" security)"
-    echo "  Backup: $BACKUP_CONFIG"
-    sudo cp "$SSHD_CANDIDATE" "$SSHD_CONFIG"
-
-    # Re-check the installed file, then reload with rollback on any failure.
-    if security_test_sshd_config; then
-        printf "  ${GREEN}✔ sshd -t syntax preflight passed.${NC}\n"
-        # Reload sshd safely with rollback on failure. reload_ok starts at 0:
-        # a branch that never runs must report failure, not silent success.
-        reload_ok=0
-        if command -v systemctl >/dev/null 2>&1 && systemctl is-system-running >/dev/null 2>&1; then
-            sshd_svc="sshd"
-            if is_debian; then sshd_svc="ssh"; fi
-            if sudo systemctl reload-or-restart "$sshd_svc" 2>/dev/null || sudo systemctl restart "$sshd_svc" 2>/dev/null; then
-                reload_ok=1
-            fi
-        elif command -v service >/dev/null 2>&1; then
-            sshd_svc="sshd"
-            if is_debian; then sshd_svc="ssh"; fi
-            if sudo service "$sshd_svc" reload 2>/dev/null || sudo service "$sshd_svc" restart 2>/dev/null; then
-                reload_ok=1
-            fi
-        elif is_macos; then
-            echo "  macOS detected: sshd configuration updated."
-            reload_ok=1
-        elif command -v pkill >/dev/null 2>&1; then
-            # Last resort: SIGHUP makes the running sshd re-exec itself and
-            # reload the configuration without dropping existing sessions —
-            # including the SSH session this script may be running over.
-            if sudo pkill -HUP -x sshd 2>/dev/null; then
-                reload_ok=1
-            fi
-        fi
-
-        if [[ $reload_ok -eq 1 ]]; then
-            printf "  ${GREEN}✔ sshd reloaded with hardened policies.${NC}\n"
-        else
-            printf "  ${RED}ERROR: sshd reload/restart failed! Rolling back sshd_config...${NC}\n" >&2
-            sudo cp "$BACKUP_CONFIG" "$SSHD_CONFIG"
-            if command -v systemctl >/dev/null 2>&1; then
-                sudo systemctl restart ssh 2>/dev/null || sudo systemctl restart sshd 2>/dev/null || true
-            fi
-            echo "  Rolled back to previous working configuration." >&2
-            exit 1
-        fi
-    else
-        printf "  ${RED}ERROR: sshd -t test failed! Rolling back sshd_config...${NC}\n" >&2
-        sudo cp "$BACKUP_CONFIG" "$SSHD_CONFIG"
-        echo "  Rolled back to previous working configuration. Service was not restarted." >&2
-        exit 1
-    fi
-else
-    echo "  /etc/ssh/sshd_config not found, skipping sshd hardening."
-fi
+rig_system_backup_once "$SSHD_CONFIG" pre-rig >/dev/null
+BACKUP_CONFIG="$(rig_system_backup "$SSHD_CONFIG" security)"
+echo "  Backup: $BACKUP_CONFIG"
+SSH_CHANGED=1
+sudo cp "$SSHD_CANDIDATE" "$SSHD_CONFIG"
+security_test_sshd_config || { echo "ERROR: installed sshd configuration failed preflight" >&2; exit 1; }
+security_reload_sshd || { echo "ERROR: sshd reload failed" >&2; exit 1; }
+security_verify_sshd_listener "$RIG_SSH_PORT" || { echo "ERROR: new SSH listener not verified" >&2; exit 1; }
+echo "  ✔ New SSH listener verified on port $RIG_SSH_PORT."
 
 # Reconcile rules that were previously declared by Rig but the user removed in
 # this run. Do this only after the SSH candidate has been applied successfully.
 if [[ "$FW_BACKEND" != "none" ]]; then
     IFS=',' read -r -a previous_tcp_ports <<< "$PREVIOUS_PUBLIC_TCP"
-    for p in "${previous_tcp_ports[@]}"; do
+    for p in "${previous_tcp_ports[@]+"${previous_tcp_ports[@]}"}"; do
         p="$(printf '%s' "$p" | tr -d ' ')"
         [[ -z "$p" ]] && continue
         if ! csv_has_port "$RIG_PUBLIC_TCP" "$p"; then
@@ -404,7 +400,7 @@ if [[ "$FW_BACKEND" != "none" ]]; then
     # Same reconciliation for UDP: a port dropped from RIG_PUBLIC_UDP must not
     # leave a stale allow rule behind.
     IFS=',' read -r -a previous_udp_ports <<< "$PREVIOUS_PUBLIC_UDP"
-    for p in "${previous_udp_ports[@]}"; do
+    for p in "${previous_udp_ports[@]+"${previous_udp_ports[@]}"}"; do
         p="$(printf '%s' "$p" | tr -d ' ')"
         [[ -z "$p" ]] && continue
         if ! csv_has_port "$RIG_PUBLIC_UDP" "$p"; then
@@ -419,6 +415,15 @@ if [[ "$FW_BACKEND" != "none" ]]; then
             firewall_remove_public_port "$FW_BACKEND" "$CURRENT_SSH_PORT" tcp
         fi
     fi
+    for p in $CURRENT_SSH_PORTS; do
+        if [[ "$p" != "$RIG_SSH_PORT" ]] && ! csv_has_port "$RIG_PUBLIC_TCP" "$p"; then
+            if [[ "$PREVIOUS_SSH_ACCESS" == tailscale ]]; then
+                firewall_remove_interface_port "$FW_BACKEND" "$p" tcp tailscale0
+            else
+                firewall_remove_public_port "$FW_BACKEND" "$p" tcp
+            fi
+        fi
+    done
     firewall_reload "$FW_BACKEND"
 fi
 
@@ -441,19 +446,26 @@ fi
 
 # Record only a fully applied policy. Failed preflight/firewall/reload paths exit
 # before this point and therefore cannot persist a misleading desired state.
-rig_config_set RIG_ADMIN_USER "$RIG_ADMIN_USER"
-rig_config_set RIG_SSH_PORT "$RIG_SSH_PORT"
-rig_config_set RIG_SSH_ROOT_LOGIN "$RIG_SSH_ROOT_LOGIN"
-rig_config_set RIG_SSH_PASSWORD_AUTH "$RIG_SSH_PASSWORD_AUTH"
-rig_config_set RIG_SSH_PUBKEY_AUTH "$RIG_SSH_PUBKEY_AUTH"
-rig_config_set RIG_SSH_ACCESS "$RIG_SSH_ACCESS"
-rig_config_set RIG_FIREWALL "$RIG_FIREWALL"
-rig_config_set RIG_FIREWALL_DEFAULT_IN "$RIG_FIREWALL_DEFAULT_IN"
-rig_config_set RIG_FIREWALL_DEFAULT_OUT "$RIG_FIREWALL_DEFAULT_OUT"
-rig_config_set RIG_PUBLIC_TCP "$RIG_PUBLIC_TCP"
-rig_config_set RIG_PUBLIC_UDP "$RIG_PUBLIC_UDP"
-rig_config_set RIG_CHECK_LISTENING_PORTS "$RIG_CHECK_LISTENING_PORTS"
-rig_config_set RIG_WARN_UNDECLARED_PORTS "$RIG_WARN_UNDECLARED_PORTS"
+# Stage the entire policy so a failed write cannot leave half of a policy saved.
+POLICY_FILE="$(rig_config_file)"
+mkdir -p "$(dirname "$POLICY_FILE")"
+POLICY_TMP="$(mktemp "${POLICY_FILE}.tmp.XXXXXX")"
+chmod 600 "$POLICY_TMP"
+if [[ -f "$POLICY_FILE" ]]; then cat "$POLICY_FILE" > "$POLICY_TMP"; fi
+if ! (
+    export RIG_CONFIG_FILE="$POLICY_TMP"
+    for key in RIG_ADMIN_USER RIG_SSH_PORT RIG_SSH_ROOT_LOGIN RIG_SSH_PASSWORD_AUTH \
+        RIG_SSH_PUBKEY_AUTH RIG_SSH_ACCESS RIG_FIREWALL RIG_FIREWALL_DEFAULT_IN \
+        RIG_FIREWALL_DEFAULT_OUT RIG_PUBLIC_TCP RIG_PUBLIC_UDP RIG_CHECK_LISTENING_PORTS \
+        RIG_WARN_UNDECLARED_PORTS; do
+        rig_config_set "$key" "${!key}" || exit 1
+    done
+); then
+    rm -f "$POLICY_TMP"
+    exit 1
+fi
+mv "$POLICY_TMP" "$POLICY_FILE"
+POLICY_COMMITTED=1
 echo "  Saved security choices in $(rig_config_file)."
 
 echo ""

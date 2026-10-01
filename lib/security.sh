@@ -52,12 +52,35 @@ _security_owner_of() {
 # _security_user_in_list - Match a user against an sshd user-pattern list
 # ("user" or "user@host" entries; * and ? globs apply like sshd's own matcher).
 _security_user_in_list() {
-    local user="$1" list="$2" tok upat
+    local user="$1" list="$2" context="${3:-}" mode="${4:-allow}" tok upat hostpat field
+    local address="" hostname=""
+    local -a fields=()
+    IFS=',' read -r -a fields <<< "$context"
+    for field in "${fields[@]+"${fields[@]}"}"; do
+        case "$field" in addr=*) address="${field#addr=}" ;; host=*) hostname="${field#host=}" ;; esac
+    done
     for tok in $list; do
         upat="${tok%%@*}"
         # Intentional glob: sshd user patterns allow * and ? wildcards.
         # shellcheck disable=SC2053
-        [[ "$user" == $upat ]] && return 0
+        [[ "$user" == $upat ]] || continue
+        [[ "$tok" == *@* ]] || return 0
+        hostpat="${tok#*@}"
+        if [[ "$hostpat" == */* ]]; then
+            if [[ -n "$address" ]] && command -v python3 >/dev/null 2>&1; then
+                if python3 -c 'import ipaddress,sys; sys.exit(0 if ipaddress.ip_address(sys.argv[1]) in ipaddress.ip_network(sys.argv[2], strict=False) else 1)' "$address" "$hostpat" 2>/dev/null; then
+                    return 0
+                fi
+            elif [[ "$mode" == deny ]]; then
+                # Unknown source constraints are not proof that login is safe.
+                return 0
+            fi
+        elif [[ -n "$address$hostname" ]]; then
+            # shellcheck disable=SC2053
+            [[ "$address" == $hostpat || "$hostname" == $hostpat ]] && return 0
+        elif [[ "$mode" == deny ]]; then
+            return 0
+        fi
     done
     return 1
 }
@@ -88,6 +111,8 @@ _security_verify_fail() {
 # Returns: 0 if valid and has sudo + key, 1 otherwise
 security_verify_admin_user() {
     local user="$1"
+    local config_file="${2:-}" context="${3:-}"
+    local _SECURITY_SSHD_OUTPUT
 
     if [[ -z "$user" || "$user" == "root" ]]; then
         _security_verify_fail "admin user is empty or root"
@@ -127,14 +152,26 @@ security_verify_admin_user() {
         return 1
     fi
 
-    # Group membership alone does not prove sudo works. When we are root we
-    # can ask sudo itself; a wheel member on a box whose sudoers grants wheel
-    # nothing would pass the group check and still be unable to elevate.
-    if [[ "$(id -u 2>/dev/null || true)" == "0" ]] && command -v sudo >/dev/null 2>&1; then
-        if ! sudo -n -l -U "$user" >/dev/null 2>&1; then
+    # Group membership alone does not prove sudo works. Ask sudo even when
+    # invoked by a normal user, using cached credentials or a visible prompt.
+    if command -v sudo >/dev/null 2>&1; then
+        if ! sudo -n -l -U "$user" >/dev/null 2>&1 && ! (
+            [[ "${RIG_NO_SUDO_PROMPT:-0}" != 1 && "${RIG_NON_INTERACTIVE:-0}" != 1 ]] \
+                && rig_can_prompt && sudo -l -U "$user" </dev/tty >/dev/null
+        ); then
             _security_verify_fail "sudo -l reports no privileges for '$user' (sudoers does not grant sudo)"
             return 1
         fi
+    else
+        _security_verify_fail "sudo is unavailable; admin privileges cannot be verified"
+        return 1
+    fi
+
+    # One resolved snapshot for all checks, including the candidate's Match
+    # context. A failed query must never turn into permissive empty lists.
+    if ! _SECURITY_SSHD_OUTPUT="$(security_sshd_effective "$config_file" "$context")"; then
+        _security_verify_fail "cannot resolve effective sshd configuration"
+        return 1
     fi
 
     # 4. Resolve the authorized-keys file sshd actually reads. The default is
@@ -206,7 +243,7 @@ security_verify_admin_user() {
     fi
 
     # Ensure file contains actual public key patterns
-    if ! grep -qE '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-|sk-)' "$auth_keys" 2>/dev/null; then
+    if ! ssh-keygen -l -f "$auth_keys" >/dev/null 2>&1; then
         _security_verify_fail "$auth_keys contains no recognizable public key"
         return 1
     fi
@@ -223,6 +260,20 @@ security_verify_admin_user() {
         return 1
     fi
 
+    local methods method key_only=0
+    methods="$(security_get_sshd_param AuthenticationMethods unknown)"
+    for method in $methods; do
+        [[ "$method" == any || "$method" == publickey ]] && key_only=1
+    done
+    if [[ "$key_only" -ne 1 ]]; then
+        _security_verify_fail "AuthenticationMethods '$methods' does not permit verified key-only login"
+        return 1
+    fi
+    if [[ "$(security_get_sshd_param RefuseConnection no)" == yes ]]; then
+        _security_verify_fail "sshd refuses connections for this admin context"
+        return 1
+    fi
+
     # 7. Allow/Deny user and group lists must not exclude the admin account.
     # These come from sshd -T, so unset directives simply yield empty strings.
     local allowusers denyusers allowgroups denygroups
@@ -230,11 +281,11 @@ security_verify_admin_user() {
     denyusers="$(security_get_sshd_param DenyUsers "")"
     allowgroups="$(security_get_sshd_param AllowGroups "")"
     denygroups="$(security_get_sshd_param DenyGroups "")"
-    if [[ -n "$denyusers" ]] && _security_user_in_list "$user" "$denyusers"; then
+    if [[ -n "$denyusers" ]] && _security_user_in_list "$user" "$denyusers" "$context" deny; then
         _security_verify_fail "user '$user' matches DenyUsers ($denyusers)"
         return 1
     fi
-    if [[ -n "$allowusers" ]] && ! _security_user_in_list "$user" "$allowusers"; then
+    if [[ -n "$allowusers" ]] && ! _security_user_in_list "$user" "$allowusers" "$context" allow; then
         _security_verify_fail "user '$user' is not in AllowUsers ($allowusers)"
         return 1
     fi
@@ -298,10 +349,10 @@ security_test_sshd_config() {
         sudo mkdir -p /run/sshd 2>/dev/null || true
     fi
     if command -v sshd >/dev/null 2>&1; then
-        sudo sshd -t "${args[@]}" 2>/dev/null
+        sudo sshd -t "${args[@]+"${args[@]}"}" 2>/dev/null
         return $?
     elif [[ -x /usr/sbin/sshd ]]; then
-        sudo /usr/sbin/sshd -t "${args[@]}" 2>/dev/null
+        sudo /usr/sbin/sshd -t "${args[@]+"${args[@]}"}" 2>/dev/null
         return $?
     fi
     echo "sshd executable not found; configuration cannot be validated" >&2
@@ -365,52 +416,119 @@ security_render_sshd_config() {
     } > "$output"
 }
 
-# security_get_sshd_param - Retrieve effective parameter from sshd configuration
-# Arguments: param_name, default_value
+# security_sshd_context USER PORT - Use the current SSH connection when known.
+# An explicit context is useful when applying a policy from a local console.
+security_sshd_context() {
+    local user="$1" port="$2" client client_port server server_port
+    if [[ -n "${RIG_SSH_TEST_CONTEXT:-}" ]]; then
+        printf 'user=%s,%s\n' "$user" "$RIG_SSH_TEST_CONTEXT"
+    elif [[ -n "${SSH_CONNECTION:-}" ]]; then
+        read -r client client_port server server_port <<< "$SSH_CONNECTION"
+        printf 'user=%s,host=%s,addr=%s,laddr=%s,lport=%s\n' "$user" "$client" "$client" "$server" "$port"
+    else
+        printf 'user=%s,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=%s\n' "$user" "$port"
+    fi
+}
+
+# Resolve the whole configuration, with optional candidate file and Match context.
+security_sshd_effective() {
+    local config_file="${1:-}" context="${2:-}" sshd_bin="" output
+    local -a args=(-T)
+    [[ -z "$config_file" ]] || args+=(-f "$config_file")
+    [[ -z "$context" ]] || args+=(-C "$context")
+    if command -v sshd >/dev/null 2>&1; then sshd_bin=sshd
+    elif [[ -x /usr/sbin/sshd ]]; then sshd_bin=/usr/sbin/sshd
+    else return 1; fi
+    if output="$("$sshd_bin" "${args[@]}" 2>/dev/null)" && [[ -n "$output" ]]; then
+        printf '%s\n' "$output"; return 0
+    fi
+    if output="$(sudo -n "$sshd_bin" "${args[@]}" 2>/dev/null)" && [[ -n "$output" ]]; then
+        printf '%s\n' "$output"; return 0
+    fi
+    if [[ "${RIG_NO_SUDO_PROMPT:-0}" != 1 ]] && rig_can_prompt 2>/dev/null; then
+        if output="$(sudo "$sshd_bin" "${args[@]}" </dev/tty)" && [[ -n "$output" ]]; then
+            printf '%s\n' "$output"; return 0
+        fi
+    fi
+    return 1
+}
+
+# Scalar directives yield one value; list directives retain ALL rows and values.
 security_get_sshd_param() {
-    local param="$1"
-    # Use ${2-...} (no colon): callers pass an explicit "" default for
-    # directives like AllowUsers where "unset" means "not restricted", and
-    # that must not be coerced to "unknown".
-    local default_val="${2-unknown}"
-
-    # 1. Prefer sshd -T for fully resolved runtime configuration
-    local sshd_bin=""
-    if command -v sshd >/dev/null 2>&1; then
-        sshd_bin="sshd"
-    elif [[ -x /usr/sbin/sshd ]]; then
-        sshd_bin="/usr/sbin/sshd"
+    local param="$1" default_val="${2-unknown}" output value
+    if [[ -n "${_SECURITY_SSHD_OUTPUT:-}" ]]; then
+        output="$_SECURITY_SSHD_OUTPUT"
+    elif ! output="$(security_sshd_effective "${3:-}" "${4:-}")"; then
+        printf '%s\n' "$default_val"; return 0
     fi
+    value="$(printf '%s\n' "$output" | awk -v key="$param" '
+        tolower($1) == tolower(key) {
+            $1=""; sub(/^[[:space:]]+/, "")
+            if (found++) printf " "
+            printf "%s", $0
+        }
+        END { if (found) printf "\n" }
+    ')"
+    printf '%s\n' "${value:-$default_val}"
+}
 
-    if [[ -n "$sshd_bin" ]]; then
-        # sshd -T needs the privilege-separation dir; it is missing on minimal
-        # Debian-family installs, which would silently turn every lookup into
-        # the default value.
-        if [[ "$(uname -s 2>/dev/null)" == "Linux" && ! -d /run/sshd ]]; then
-            # sudo -n: read-only callers (status/doctor) must never prompt.
-            sudo -n mkdir -p /run/sshd 2>/dev/null || mkdir -p /run/sshd 2>/dev/null || true
-        fi
-        local t_val=""
-        t_val="$("$sshd_bin" -T 2>/dev/null | grep -i "^${param} " | head -1 | awk '{print $2}' || true)"
-        # sshd -T needs root to read host keys. Retry via sudo: first
-        # non-interactive (cached/NOPASSWD creds), then a visible prompt when
-        # a TTY exists — silently falling back to defaults caused false
-        # anti-lockout rejections.
-        if [[ -z "$t_val" ]]; then
-            t_val="$(sudo -n "$sshd_bin" -T 2>/dev/null | grep -i "^${param} " | head -1 | awk '{print $2}' || true)"
-        fi
-        if [[ -z "$t_val" && "${RIG_NO_SUDO_PROMPT:-0}" != "1" ]] && rig_can_prompt 2>/dev/null; then
-            t_val="$(sudo "$sshd_bin" -T </dev/tty 2>/dev/null | grep -i "^${param} " | head -1 | awk '{print $2}' || true)"
-        fi
-        if [[ -n "$t_val" ]]; then
-            echo "$t_val"
-            return 0
-        fi
+# Confirm the new port belongs to an SSH listener before withdrawing old rules.
+security_verify_sshd_listener() {
+    local port="$1" sockets
+    if command -v ss >/dev/null 2>&1; then
+        sockets="$(sudo ss -H -lntp)" || return 1
+        printf '%s\n' "$sockets" | awk -v port="$port" '
+            $4 ~ (":" port "$") && /users:.*"sshd"/ { found=1 }
+            END { exit !found }
+        '
+    elif command -v lsof >/dev/null 2>&1; then
+        sudo lsof -nP -iTCP:"$port" -sTCP:LISTEN | awk '
+            $1 == "sshd" || $1 == "launchd" { found=1 }
+            END { exit !found }
+        '
+    else
+        echo "Cannot verify the new SSH listener: ss/lsof is unavailable" >&2
+        return 1
     fi
+}
 
-    # Do not guess from files: Include placement, lexical glob order, and Match
-    # contexts make a simple grep materially different from effective config.
-    echo "$default_val"
+security_sshd_is_running() {
+    local svc=sshd
+    is_debian && svc=ssh
+    if command -v systemctl >/dev/null 2>&1 && systemctl show --property=Version >/dev/null 2>&1; then
+        systemctl is-active --quiet "$svc"
+    else
+        pgrep -x sshd >/dev/null 2>&1
+    fi
+}
+
+security_stop_sshd() {
+    local svc=sshd
+    is_debian && svc=ssh
+    if command -v systemctl >/dev/null 2>&1 && systemctl show --property=Version >/dev/null 2>&1; then
+        sudo systemctl stop "$svc"
+    elif is_macos; then
+        sudo launchctl bootout system/com.openssh.sshd
+    elif command -v service >/dev/null 2>&1; then
+        sudo service "$svc" stop
+    else
+        sudo pkill -TERM -x sshd
+    fi
+}
+
+# Shared apply/rollback service operation; failures remain visible to the caller.
+security_reload_sshd() {
+    local svc=sshd
+    is_debian && svc=ssh
+    if command -v systemctl >/dev/null 2>&1 && systemctl show --property=Version >/dev/null 2>&1; then
+        sudo systemctl reload-or-restart "$svc" || sudo systemctl restart "$svc"
+    elif is_macos; then
+        sudo launchctl kickstart -k system/com.openssh.sshd
+    elif command -v service >/dev/null 2>&1; then
+        sudo service "$svc" reload || sudo service "$svc" restart
+    else
+        sudo pkill -HUP -x sshd
+    fi
 }
 
 # security_audit_listening_ports - Audit open ports against declared policy and active firewall
@@ -447,13 +565,13 @@ security_audit_listening_ports() {
     local item
 
     IFS=',' read -r -a raw_tcp <<< "$allowed_tcp_csv"
-    for item in "${raw_tcp[@]}"; do
+    for item in "${raw_tcp[@]+"${raw_tcp[@]}"}"; do
         item="$(echo "$item" | tr -d ' ')"
         [[ -n "$item" ]] && allowed_tcp+=("$item")
     done
 
     IFS=',' read -r -a raw_udp <<< "$allowed_udp_csv"
-    for item in "${raw_udp[@]}"; do
+    for item in "${raw_udp[@]+"${raw_udp[@]}"}"; do
         item="$(echo "$item" | tr -d ' ')"
         [[ -n "$item" ]] && allowed_udp+=("$item")
     done
@@ -475,7 +593,7 @@ security_audit_listening_ports() {
 
         local bind_ip port
         # Accept bracketed IPv6 and %-zone suffixes (127.0.0.53%lo, fe80::1%eth0)
-        if [[ "$local_addr" =~ \[?([0-9a-fA-F:%\.A-Za-z]+)\]?:([0-9]+)$ ]]; then
+        if [[ "$local_addr" =~ \[?([*0-9a-fA-F:%\.A-Za-z]+)\]?:([0-9]+)$ ]]; then
             bind_ip="${BASH_REMATCH[1]}"
             bind_ip="${bind_ip%%%*}"
             port="${BASH_REMATCH[2]}"
@@ -501,13 +619,13 @@ security_audit_listening_ports() {
             status_str="${GREEN}✔ Internal only${NC}"
         else
             if [[ "$proto" == "tcp" ]]; then
-                for p in "${allowed_tcp[@]}"; do
+                for p in "${allowed_tcp[@]+"${allowed_tcp[@]}"}"; do
                     if [[ "$p" == "$port" ]]; then
                         is_declared=1; break
                     fi
                 done
             elif [[ "$proto" == "udp" ]]; then
-                for p in "${allowed_udp[@]}"; do
+                for p in "${allowed_udp[@]+"${allowed_udp[@]}"}"; do
                     if [[ "$p" == "$port" ]]; then
                         is_declared=1; break
                     fi
@@ -556,7 +674,7 @@ security_audit_listening_ports() {
 
     if [[ ${#warnings[@]} -gt 0 ]]; then
         printf "\n  ${YELLOW}${BOLD}Security Warnings:${NC}\n"
-        for w in "${warnings[@]}"; do
+        for w in "${warnings[@]+"${warnings[@]}"}"; do
             printf "  ${YELLOW}[!] $w${NC}\n"
         done
         printf "  ${DIM}Hint: Private container services should explicitly bind to 127.0.0.1 (e.g., 127.0.0.1:port:port).${NC}\n"

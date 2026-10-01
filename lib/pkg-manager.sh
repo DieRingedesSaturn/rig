@@ -106,7 +106,7 @@ pkg_install() {
             # All three block until a keypress — invisible under a spinner and
             # stuck on EOF under curl|bash. env(1) carries the vars past sudo's
             # env_reset; --force-confold keeps the user's config on upgrades.
-            _sudo_if_needed apt-get update -qq
+            _sudo_if_needed apt-get update -qq || return 1
             _sudo_if_needed env DEBIAN_FRONTEND=noninteractive \
                 NEEDRESTART_MODE=l APT_LISTCHANGES_FRONTEND=none \
                 apt-get install -y -qq \
@@ -144,8 +144,12 @@ pkg_update() {
         # Update all packages
         case "$PKG_MANAGER" in
             apt)
-                _sudo_if_needed apt-get update -qq
-                _sudo_if_needed apt-get upgrade -y -qq
+                _sudo_if_needed apt-get update -qq || return 1
+                _sudo_if_needed env DEBIAN_FRONTEND=noninteractive \
+                    NEEDRESTART_MODE=l APT_LISTCHANGES_FRONTEND=none \
+                    apt-get upgrade -y -qq \
+                    -o Dpkg::Options::=--force-confdef \
+                    -o Dpkg::Options::=--force-confold
                 ;;
             dnf)
                 _sudo_if_needed dnf upgrade -y
@@ -176,7 +180,7 @@ pkg_update() {
         # shellcheck disable=SC2086
         case "$PKG_MANAGER" in
             apt)
-                _sudo_if_needed apt-get update -qq
+                _sudo_if_needed apt-get update -qq || return 1
                 _sudo_if_needed env DEBIAN_FRONTEND=noninteractive \
                     NEEDRESTART_MODE=l APT_LISTCHANGES_FRONTEND=none \
                     apt-get install --only-upgrade -y -qq \

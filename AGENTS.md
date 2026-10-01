@@ -70,19 +70,21 @@ flowchart TD
 ```mermaid
 flowchart TD
     S0[触发 Security 加固流程] --> S1[1. 校验 Admin 用户\n非root/存在/未锁定/sudo组+sudo -l可用]
-    S1 --> S2[2. 验证 authorized_keys\n生效AuthorizedKeysFile/权限/AllowDeny列表]
+    S1 --> S2[2. 渲染并验证候选配置中的管理员登录\nsshd -T -f -C / AuthorizedKeysFile / 权限 / 全部AllowDeny值 / 认证组合]
     S2 --> S3{校验全部通过?}
     S3 -- 否 --> S4[硬性拒绝禁用 Root / 密码登录\n输出告警并终止]
     S3 -- 是 --> S5[3. 渲染候选 sshd_config 并执行 sshd -t 预检]
     S5 --> S6{预检通过?}
     S6 -- 否 --> S4
-    S6 -- 是 --> S7[4. 配置防火墙: 先放行目标 SSH 端口再设默认策略]
+    S6 -- 是 --> S7[4. 保存防火墙快照\n先保护当前与目标 SSH 端口再设默认策略\n未运行的firewalld先离线准备规则]
     S7 --> S8[5. 备份并安装候选配置, 二次 sshd -t]
     S8 --> S9[6. 重载 sshd 服务]
     S9 --> S10{重载成功?}
-    S10 -- 否 --> S11[自动回滚 sshd_config, 恢复原服务状态]
-    S10 -- 是 --> S12[7. 对账清除已撤销端口 + 端口审计]
-    S12 --> S13[8. 持久化策略至 ~/.config/rig/config]
+    S10 -- 否 --> S11[自动回滚 sshd_config 与防火墙快照\n恢复原服务状态 / 明确报告回滚失败]
+    S10 -- 是 --> S14{新SSH监听确认?}
+    S14 -- 否 --> S11
+    S14 -- 是 --> S12[7. 对账清除已撤销端口 + 端口审计\n后续失败仍回滚SSH及防火墙]
+    S12 --> S13[8. 原子持久化策略至 ~/.config/rig/config]
 ```
 
 ### 2.3 端口双层审计对比逻辑

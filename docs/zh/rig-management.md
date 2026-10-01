@@ -284,7 +284,7 @@ Delete all Docker data? [y/N]
 
 ### 强制模式
 
-`--force` 标志跳过依赖检查，但仍执行配置备份和数据提示：
+`--force` 跳过依赖检查与提示，默认保留数据。`~/.nvm` 中所有 Node 版本及全局 npm 包均保留；仅显式使用 `--remove-node-data` 才删除整个目录，`--keep-node-versions` 可指定保留：
 
 ```bash
 rig uninstall node --force    # 即使有依赖组件也卸载 Node.js

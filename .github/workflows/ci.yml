@@ -443,8 +443,9 @@ jobs:
         if: matrix.component == 'tools'
         shell: bash
         run: |
-          /bin/bash -n rig install.sh uninstall.sh update.sh status.sh export-config.sh import-config.sh setup-*.sh lib/*.sh tests/*.sh
+          for script in rig *.sh lib/*.sh tests/*.sh; do /bin/bash -n "$script" || exit 1; done
           /bin/bash tests/test-config-security.sh
+          /bin/bash tests/test-audit-regressions.sh
 
       - name: Verify commands
         if: matrix.verify != ''
@@ -761,7 +762,9 @@ jobs:
           echo "✔ import-config.sh validation works"
 
       - name: "Test: config import and security rendering regressions"
-        run: bash tests/test-config-security.sh
+        run: |
+          bash tests/test-config-security.sh
+          bash tests/test-audit-regressions.sh
 
       - name: "Test: uninstall.sh — help"
         run: |

@@ -310,6 +310,26 @@ fi
 
 # --- Persist Rig Config ------------------------------------------------------
 
+# Resolve and validate the installer before modifying user configuration.
+if [[ -n "$GH_PROXY" && "$GH_PROXY" != https://* ]]; then
+    echo "error: GH_PROXY must use https://" >&2
+    exit 1
+fi
+INSTALL_SCRIPT="$SCRIPT_DIR/install.sh"
+if [[ ! -f "$INSTALL_SCRIPT" ]]; then
+    INSTALL_TMP="$(mktemp -d)"
+    trap 'rm -rf "$INSTALL_TMP"' EXIT
+    install_url="https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh"
+    [[ -z "$GH_PROXY" ]] || install_url="${GH_PROXY%/}/$install_url"
+    INSTALL_SCRIPT="$INSTALL_TMP/install.sh"
+    if ! curl -fsSL "$install_url" -o "$INSTALL_SCRIPT" || [[ ! -s "$INSTALL_SCRIPT" ]] \
+        || ! head -1 "$INSTALL_SCRIPT" | grep -q '^#!/' || ! bash -n "$INSTALL_SCRIPT"; then
+        echo "error: failed to download a valid installer; import was not applied" >&2
+        exit 1
+    fi
+    [[ ! -d "$SCRIPT_DIR/lib" ]] || cp -R "$SCRIPT_DIR/lib" "$INSTALL_TMP/lib"
+fi
+
 # Persist before changing unrelated user state. This also makes imported
 # values available to future `rig` commands, not only this installer process.
 if [[ -f "$SCRIPT_DIR/lib/rig-config.sh" ]]; then
@@ -347,23 +367,6 @@ fi
 
 printf "  ${DIM}Running install.sh --components %s ...${NC}\n\n" "$COMP_LIST"
 
-# Validate GH_PROXY before building URL
-if [[ -n "$GH_PROXY" ]] && [[ "$GH_PROXY" != https://* ]]; then
-    printf "${RED}error:${NC} GH_PROXY must use https:// (got: %s). HTTP proxies are rejected to prevent MITM attacks.\n" "$GH_PROXY" >&2
-    exit 1
-fi
-
-# Build install.sh URL
-_RAW="raw.githubusercontent.com"
-REPO="DieRingedesSaturn/rig"
-BRANCH="master"
-BASE_URL="https://${_RAW}/${REPO}/${BRANCH}"
-
-install_url="${BASE_URL}/install.sh"
-if [[ -n "$GH_PROXY" ]]; then
-    install_url="${GH_PROXY%/}/${BASE_URL}/install.sh"
-fi
-
 # Export env vars for install.sh
 export GH_PROXY
 export TAILSCALE_AUTH_KEY
@@ -384,9 +387,5 @@ export TAILSCALE_AUTH_KEY
 [[ -n "$RIG_CHECK_LISTENING_PORTS" ]] && export RIG_CHECK_LISTENING_PORTS
 [[ -n "$RIG_WARN_UNDECLARED_PORTS" ]] && export RIG_WARN_UNDECLARED_PORTS
 
-# If running from local repo, use local install.sh
-if [[ -f "$SCRIPT_DIR/install.sh" ]]; then
-    exec bash "$SCRIPT_DIR/install.sh" --components "$COMP_LIST"
-else
-    exec bash <(curl -fsSL "$install_url") --components "$COMP_LIST"
-fi
+# Keep the shell alive for temporary-file cleanup and propagate installation failure.
+bash "$INSTALL_SCRIPT" --components "$COMP_LIST"
