@@ -312,7 +312,9 @@ if not is_remote and vim.fn.executable('wl-copy') == 1 then
   vim.opt.clipboard:append('unnamedplus')
 elseif vim.fn.has('nvim-0.10') == 1 then
   vim.g.clipboard = 'osc52'
-  vim.keymap.set('x', 'y', '"+y')
+  -- unnamedplus sends every yank through the osc52 provider, matching the
+  -- <0.10 fallback below: all yanks copy out, nothing can paste in.
+  vim.opt.clipboard:append('unnamedplus')
 else
   -- nvim < 0.10 (e.g. Debian stable) has no osc52 provider; emit the escape to
   -- /dev/tty on every yank instead. Inside tmux this needs `set-clipboard on`.
@@ -325,9 +327,16 @@ else
       if tty then tty:write('\27]52;c;' .. b64 .. '\7'); tty:close() end
     end,
   })
-  -- '"+y' would still error (the + register needs a provider) — remap it to a
-  -- plain yank so muscle memory works; the autocmd pushes it via OSC 52.
-  vim.keymap.set({ 'n', 'x' }, '"+y', 'y', { remap = true })
+  -- '"+<op>' and '"*<op>' would error (those registers need a provider).
+  -- Remap them to the plain operation so muscle memory works: yanks still
+  -- leave via OSC 52, and "+p/"+d/etc. use the default register instead
+  -- (OSC 52 is one-way — the local clipboard cannot be read remotely).
+  for _, lhs in ipairs({
+    '"+y', '"+Y', '"+d', '"+D', '"+c', '"+C', '"+x', '"+p', '"+P',
+    '"*y', '"*Y', '"*d', '"*D', '"*c', '"*C', '"*x', '"*p', '"*P',
+  }) do
+    vim.keymap.set({ 'n', 'x' }, lhs, lhs:sub(3), { remap = true })
+  end
 end
 
 -- Let Ghostty/Konsole own mouse selection and copy-on-select.
