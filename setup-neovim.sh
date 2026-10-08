@@ -311,7 +311,16 @@ end
 if not is_remote and vim.fn.executable('wl-copy') == 1 then
   vim.opt.clipboard:append('unnamedplus')
 elseif vim.fn.has('nvim-0.10') == 1 then
-  vim.g.clipboard = 'osc52'
+  -- The 'osc52' string shorthand for g:clipboard only exists in nvim 0.11+;
+  -- on 0.10.x it errors with "invalid g:clipboard" and leaves no provider.
+  -- The explicit provider table is the documented form on 0.10 and keeps
+  -- working on newer versions (the module still exports factory functions).
+  local osc52 = require('vim.ui.clipboard.osc52')
+  vim.g.clipboard = {
+    name = 'OSC 52',
+    copy = { ['+'] = osc52.copy('+'), ['*'] = osc52.copy('*') },
+    paste = { ['+'] = osc52.paste('+'), ['*'] = osc52.paste('*') },
+  }
   -- unnamedplus sends every yank through the osc52 provider, matching the
   -- <0.10 fallback below: all yanks copy out, nothing can paste in.
   vim.opt.clipboard:append('unnamedplus')
