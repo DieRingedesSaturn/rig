@@ -790,6 +790,16 @@ uninstall_security() {
         fi
     fi
 
+    # Remove rig's fail2ban sshd jail; the package itself is kept since it may
+    # guard other jails or predate this install.
+    local f2b_jail="/etc/fail2ban/jail.d/rig-sshd.conf"
+    if [[ -f "$f2b_jail" ]]; then
+        sudo rm -f "$f2b_jail"
+        sudo systemctl reload fail2ban 2>/dev/null \
+            || sudo fail2ban-client reload 2>/dev/null || true
+        echo "  Removed rig fail2ban jail $f2b_jail (fail2ban package kept)."
+    fi
+
     echo "  Note: Firewall rules have been preserved. To reset, use 'sudo ufw reset' or firewall-cmd."
     echo "  Security baseline rollback complete."
 }

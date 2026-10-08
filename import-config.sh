@@ -238,6 +238,7 @@ RIG_SSH_ACCESS=$(jq -r '.config.system.ssh_access // empty' "$CONFIG_FILE" 2>/de
 RIG_ADMIN_USER=$(jq -r '.config.system.admin_user // empty' "$CONFIG_FILE" 2>/dev/null || true)
 RIG_CHECK_LISTENING_PORTS=$(jq -r '.config.system.check_listening_ports // empty' "$CONFIG_FILE" 2>/dev/null || true)
 RIG_WARN_UNDECLARED_PORTS=$(jq -r '.config.system.warn_undeclared_ports // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_FAIL2BAN=$(jq -r '.config.system.fail2ban // empty' "$CONFIG_FILE" 2>/dev/null || true)
 
 # --- Load Secrets ------------------------------------------------------------
 
@@ -352,6 +353,7 @@ if [[ -f "$SCRIPT_DIR/lib/rig-config.sh" ]]; then
     [[ -n "$RIG_ADMIN_USER" ]] && rig_config_set RIG_ADMIN_USER "$RIG_ADMIN_USER"
     [[ -n "$RIG_CHECK_LISTENING_PORTS" ]] && rig_config_set RIG_CHECK_LISTENING_PORTS "$RIG_CHECK_LISTENING_PORTS"
     [[ -n "$RIG_WARN_UNDECLARED_PORTS" ]] && rig_config_set RIG_WARN_UNDECLARED_PORTS "$RIG_WARN_UNDECLARED_PORTS"
+    [[ -n "$RIG_FAIL2BAN" ]] && rig_config_set RIG_FAIL2BAN "$RIG_FAIL2BAN"
 fi
 
 # --- Apply Git Config --------------------------------------------------------
@@ -386,6 +388,7 @@ export TAILSCALE_AUTH_KEY
 [[ -n "$RIG_ADMIN_USER" ]] && export RIG_ADMIN_USER
 [[ -n "$RIG_CHECK_LISTENING_PORTS" ]] && export RIG_CHECK_LISTENING_PORTS
 [[ -n "$RIG_WARN_UNDECLARED_PORTS" ]] && export RIG_WARN_UNDECLARED_PORTS
+[[ -n "$RIG_FAIL2BAN" ]] && export RIG_FAIL2BAN
 
 # Keep the shell alive for temporary-file cleanup and propagate installation failure.
 bash "$INSTALL_SCRIPT" --components "$COMP_LIST"

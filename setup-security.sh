@@ -76,6 +76,9 @@ RIG_PUBLIC_UDP="$(rig_config_get RIG_PUBLIC_UDP "")"
 PREVIOUS_PUBLIC_UDP="$( (unset RIG_PUBLIC_UDP; rig_config_get RIG_PUBLIC_UDP ''))"
 RIG_CHECK_LISTENING_PORTS="$(rig_config_get RIG_CHECK_LISTENING_PORTS "yes")"
 RIG_WARN_UNDECLARED_PORTS="$(rig_config_get RIG_WARN_UNDECLARED_PORTS "yes")"
+# fail2ban installs a new always-on daemon, so it is opt-in: the interactive
+# prompt offers it, and non-interactive runs honor only an explicit yes.
+RIG_FAIL2BAN="$(rig_config_get RIG_FAIL2BAN "no")"
 
 csv_without_port() {
     local csv="$1" excluded="$2" item
@@ -160,6 +163,13 @@ if rig_can_prompt && [[ "${RIG_NON_INTERACTIVE:-0}" -ne 1 ]]; then
         none|None|NONE) PUBLIC_TCP_EXTRAS="" ;;
         *) PUBLIC_TCP_EXTRAS="$ans_tcp" ;;
     esac
+
+    read -rp "fail2ban sshd brute-force jail [current: $RIG_FAIL2BAN; yes/no]: " ans_f2b </dev/tty || ans_f2b=""
+    case "$ans_f2b" in
+        "") ;;
+        yes|no) RIG_FAIL2BAN="$ans_f2b" ;;
+        *) echo "  Invalid value; keeping $RIG_FAIL2BAN." ;;
+    esac
     if [[ "$RIG_SSH_ACCESS" == "public" ]]; then
         RIG_PUBLIC_TCP="$(csv_prepend_unique "$RIG_SSH_PORT" "$PUBLIC_TCP_EXTRAS")"
     else
@@ -196,6 +206,7 @@ case "$RIG_FIREWALL_DEFAULT_IN" in allow|deny) ;; *) echo "Invalid inbound firew
 case "$RIG_FIREWALL_DEFAULT_OUT" in allow|deny) ;; *) echo "Invalid outbound firewall policy: $RIG_FIREWALL_DEFAULT_OUT" >&2; exit 1 ;; esac
 case "$RIG_CHECK_LISTENING_PORTS" in yes|no) ;; *) echo "Invalid RIG_CHECK_LISTENING_PORTS: $RIG_CHECK_LISTENING_PORTS" >&2; exit 1 ;; esac
 case "$RIG_WARN_UNDECLARED_PORTS" in yes|no) ;; *) echo "Invalid RIG_WARN_UNDECLARED_PORTS: $RIG_WARN_UNDECLARED_PORTS" >&2; exit 1 ;; esac
+case "$RIG_FAIL2BAN" in yes|no) ;; *) echo "Invalid RIG_FAIL2BAN: $RIG_FAIL2BAN" >&2; exit 1 ;; esac
 
 validate_port_list() {
     local csv="$1" label="$2" item
@@ -221,8 +232,8 @@ fi
 
 echo "=== System Security & Baseline Hardening ==="
 
-# --- [1/5] Anti-lockout Protection Check -------------------------------------
-echo "[1/5] Verifying anti-lockout safety constraints..."
+# --- [1/6] Anti-lockout Protection Check -------------------------------------
+echo "[1/6] Verifying anti-lockout safety constraints..."
 
 if [[ "$RIG_SSH_PASSWORD_AUTH" == no && "$RIG_SSH_PUBKEY_AUTH" == no ]]; then
     echo "ERROR: refusing to disable both password and public-key authentication" >&2
@@ -289,9 +300,9 @@ if [[ "$LOCKOUT_RISK" -eq 1 ]]; then
     echo "  ✔ Candidate admin key authentication verified. Keep this session open until a NEW login succeeds."
 fi
 
-# --- [2/5] Firewall Provisioning ---------------------------------------------
+# --- [2/6] Firewall Provisioning ---------------------------------------------
 echo ""
-echo "[2/5] Configuring firewall..."
+echo "[2/6] Configuring firewall..."
 
 if [[ "$RIG_SSH_ACCESS" == "tailscale" ]]; then
     if command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; then
@@ -371,9 +382,9 @@ else
     printf "  ${GREEN}✔ Firewall configured and enabled.${NC}\n"
 fi
 
-# --- [3/5] SSH Hardening & sshd -t Preflight --------------------------------
+# --- [3/6] SSH Hardening & sshd -t Preflight --------------------------------
 echo ""
-echo "[3/5] Hardening OpenSSH server..."
+echo "[3/6] Hardening OpenSSH server..."
 
 rig_system_backup_once "$SSHD_CONFIG" pre-rig >/dev/null
 BACKUP_CONFIG="$(rig_system_backup "$SSHD_CONFIG" security)"
@@ -427,9 +438,83 @@ if [[ "$FW_BACKEND" != "none" ]]; then
     firewall_reload "$FW_BACKEND"
 fi
 
-# --- [4/5] Tailscale Integration Check ---------------------------------------
+# --- [4/6] Intrusion Protection (fail2ban) ------------------------------------
+# Runs after sshd is live on its (possibly new) port so the jail watches the
+# right port. fail2ban can also ban the admin's own address after fat-fingered
+# logins — only loopback is whitelisted by default, so the step prints the
+# unban command. Recovery needs any unaffected path: console, another IP, or
+# a tailnet peer.
 echo ""
-echo "[4/5] Checking Tailscale status..."
+echo "[4/6] Configuring fail2ban intrusion protection..."
+RIG_F2B_JAIL="/etc/fail2ban/jail.d/rig-sshd.conf"
+
+if is_macos; then
+    echo "  fail2ban is not supported on macOS — skipping."
+elif [[ "$RIG_FAIL2BAN" != "yes" ]]; then
+    if [[ -f "$RIG_F2B_JAIL" ]]; then
+        sudo rm -f "$RIG_F2B_JAIL"
+        sudo systemctl reload fail2ban 2>/dev/null \
+            || sudo fail2ban-client reload 2>/dev/null || true
+        echo "  fail2ban jail removed ($RIG_F2B_JAIL); package kept."
+    else
+        echo "  fail2ban disabled (RIG_FAIL2BAN=$RIG_FAIL2BAN)."
+    fi
+else
+    # RHEL-family does not ship fail2ban in the base repos — EPEL provides it.
+    if [[ "$OS_FAMILY" == "rhel" ]] && ! command -v fail2ban-client >/dev/null 2>&1; then
+        pkg_install epel-release || { echo "ERROR: fail2ban requires EPEL on $OS_DISTRO" >&2; exit 1; }
+    fi
+    if ! command -v fail2ban-client >/dev/null 2>&1; then
+        pkg_install fail2ban || { echo "ERROR: fail2ban unavailable in $OS_DISTRO repositories" >&2; exit 1; }
+    fi
+
+    # PID1=systemd ⇒ journald always captures sshd syslog, so the journal
+    # backend is reliable there. Elsewhere we omit `backend` entirely so the
+    # jail inherits the distro-tuned default (auto → log files).
+    f2b_backend=""
+    [[ -d /run/systemd/system ]] && f2b_backend="systemd"
+
+    sudo mkdir -p /etc/fail2ban/jail.d
+    [[ -f "$RIG_F2B_JAIL" ]] && rig_system_backup "$RIG_F2B_JAIL" security >/dev/null || true
+    # All tuning stays inside [sshd] — a [DEFAULT] section here would leak
+    # into every other jail the admin may have configured.
+    {
+        echo "# Managed by rig (RIG_FAIL2BAN=yes) — drop-in, does not edit jail.conf"
+        echo "[sshd]"
+        echo "enabled  = true"
+        echo "port     = $RIG_SSH_PORT"
+        echo "ignoreip = 127.0.0.1/8 ::1"
+        echo "bantime  = 1h"
+        echo "findtime = 10m"
+        echo "maxretry = 5"
+        [[ -n "$f2b_backend" ]] && echo "backend  = $f2b_backend"
+    } | sudo tee "$RIG_F2B_JAIL" >/dev/null
+
+    sudo systemctl enable --now fail2ban 2>/dev/null \
+        || sudo service fail2ban restart 2>/dev/null || true
+    # The daemon can take a moment to parse jail.d — give it a few seconds.
+    f2b_jail_ok=0
+    for _ in 1 2 3 4 5; do
+        if sudo fail2ban-client status sshd >/dev/null 2>&1; then
+            f2b_jail_ok=1
+            break
+        fi
+        sleep 1
+    done
+    if [[ "$f2b_jail_ok" -eq 1 ]]; then
+        printf "  ${GREEN}✔ fail2ban active — sshd jail on port %s (5 retries / 10m → 1h ban)${NC}\n" "$RIG_SSH_PORT"
+        echo "    If your own IP gets banned: sudo fail2ban-client set sshd unbanip <ip>"
+    elif sudo fail2ban-client ping >/dev/null 2>&1; then
+        echo "  ⚠ fail2ban daemon is running but the sshd jail did not load."
+        echo "    Check: sudo fail2ban-client status; sudo grep sshd /var/log/fail2ban.log"
+    else
+        echo "  ⚠ fail2ban installed but not responding; verify: sudo fail2ban-client ping"
+    fi
+fi
+
+# --- [5/6] Tailscale Integration Check ---------------------------------------
+echo ""
+echo "[5/6] Checking Tailscale status..."
 if command -v tailscale >/dev/null 2>&1; then
     TS_IP="$(tailscale ip -4 2>/dev/null || echo "not connected")"
     echo "  Tailscale IPv4: $TS_IP"
@@ -437,9 +522,9 @@ else
     echo "  Tailscale not installed (optional)."
 fi
 
-# --- [5/5] Listening Ports Audit ---------------------------------------------
+# --- [6/6] Listening Ports Audit ---------------------------------------------
 echo ""
-echo "[5/5] Auditing listening ports against policy..."
+echo "[6/6] Auditing listening ports against policy..."
 if [[ "$RIG_CHECK_LISTENING_PORTS" == "yes" ]]; then
     security_audit_listening_ports "$RIG_PUBLIC_TCP" "$RIG_PUBLIC_UDP" "$RIG_WARN_UNDECLARED_PORTS" "$RIG_SSH_ACCESS" "$RIG_SSH_PORT"
 fi
@@ -457,7 +542,7 @@ if ! (
     for key in RIG_ADMIN_USER RIG_SSH_PORT RIG_SSH_ROOT_LOGIN RIG_SSH_PASSWORD_AUTH \
         RIG_SSH_PUBKEY_AUTH RIG_SSH_ACCESS RIG_FIREWALL RIG_FIREWALL_DEFAULT_IN \
         RIG_FIREWALL_DEFAULT_OUT RIG_PUBLIC_TCP RIG_PUBLIC_UDP RIG_CHECK_LISTENING_PORTS \
-        RIG_WARN_UNDECLARED_PORTS; do
+        RIG_WARN_UNDECLARED_PORTS RIG_FAIL2BAN; do
         rig_config_set "$key" "${!key}" || exit 1
     done
 ); then

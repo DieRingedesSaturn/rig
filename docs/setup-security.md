@@ -27,6 +27,7 @@ Current and target SSH ports are protected during the transition. Old rules are 
 | Firewall | Backend auto-detected (`ufw` on Debian/Ubuntu/Arch, `firewalld` on Fedora/RHEL); default inbound `deny`, outbound `allow` |
 | Public ports | `RIG_PUBLIC_TCP` / `RIG_PUBLIC_UDP` opened; ports removed from the config are reconciled away |
 | Tailscale mode | SSH port bound to a dedicated `rig-tailscale` DROP zone (firewalld) or `in on tailscale0` (ufw) |
+| fail2ban | Opt-in (`RIG_FAIL2BAN=yes` or the interactive prompt): installs fail2ban — via EPEL on RHEL-family, which does not ship it in base repos — and writes a `jail.d/rig-sshd.conf` drop-in guarding the configured SSH port (5 retries / 10m → 1h ban, loopback whitelisted). Setting it back to `no` removes the drop-in and reloads fail2ban; the package itself is kept |
 | Port audit | Compares `ss -lntup` listeners against declared policy + live firewall rules |
 
 ## Firewall Behavior
@@ -54,6 +55,7 @@ Current and target SSH ports are protected during the transition. Old rules are 
 | `RIG_PUBLIC_UDP` | _(empty)_ | Comma-separated public UDP ports |
 | `RIG_CHECK_LISTENING_PORTS` | `yes` | Run the listening-port audit |
 | `RIG_WARN_UNDECLARED_PORTS` | `yes` | Warn on listeners exposed without a declared rule |
+| `RIG_FAIL2BAN` | `no` | `yes` installs/enables the fail2ban sshd jail (non-interactive runs need an explicit `yes`; macOS is skipped) |
 | `RIG_SSH_TEST_CONTEXT` | current SSH connection / localhost | Optional `host=...,addr=...,laddr=...,lport=...` context; Rig supplies `user` |
 
 ## Files Modified
@@ -61,13 +63,14 @@ Current and target SSH ports are protected during the transition. Old rules are 
 | File | Description |
 |------|-------------|
 | `/etc/ssh/sshd_config` | Backed up to `~/.local/share/rig/backups/system/` before every change |
+| `/etc/fail2ban/jail.d/rig-sshd.conf` | Managed drop-in when `RIG_FAIL2BAN=yes` (jail.conf itself is never edited); removed when set back to `no` |
 | `~/.config/rig/config` | Persisted policy, written only on full success |
 
 ## Re-run Behavior
 
 Idempotent: existing rules are skipped, undeclared ports are reconciled, and `sshd_config` is re-rendered + re-preflighted each run. `--yes` / `--non-interactive` skips the interactive policy prompt.
 
-The interactive prompt covers SSH scope, authentication modes, port, and extra public TCP ports. A rejected key-login check refers to the candidate's effective admin context: inspect applicable `Match` rules and authentication restrictions before retrying.
+The interactive prompt covers SSH scope, authentication modes, port, extra public TCP ports, and the fail2ban jail. A rejected key-login check refers to the candidate's effective admin context: inspect applicable `Match` rules and authentication restrictions before retrying. If fail2ban bans your own address, connect from another path (console / different IP / tailnet peer) and run `sudo fail2ban-client set sshd unbanip <ip>`.
 
 ## Dependencies
 

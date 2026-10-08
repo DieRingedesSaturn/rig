@@ -27,8 +27,10 @@ EOF
     source "$ROOT_DIR/lib/rig-config.sh"
     rig_config_set RIG_COMPONENTS "shell,security"
     rig_config_set RIG_PUBLIC_UDP ""
+    rig_config_set RIG_FAIL2BAN "yes"
     [[ "$(rig_config_get RIG_COMPONENTS missing)" == "shell,security" ]]
     [[ "$(rig_config_get RIG_PUBLIC_UDP fallback)" == "" ]]
+    [[ "$(rig_config_get RIG_FAIL2BAN missing)" == "yes" ]]
     [[ "$(rig_config_get RIG_PROFILE missing)" == "desktop" ]]
     ! rig_config_set NOT_A_RIG_KEY value >/dev/null 2>&1
 ) || fail "configuration get/set behavior"
@@ -145,6 +147,22 @@ grep -q 'rig_config_get RIG_PUBLIC_TCP "$RIG_SSH_PORT"' "$ROOT_DIR/setup-securit
 ! grep -q 'RIG_PUBLIC_TCP "22,80,443"' "$ROOT_DIR/setup-security.sh" || \
     fail "security baseline still opens 80/443 by default"
 
+# The managed fail2ban drop-in must scope tuning to the [sshd] jail only — a
+# [DEFAULT] section would silently retune every other jail the admin runs.
+JAIL_TEMPLATE="$(sed -n '/Managed by rig (RIG_FAIL2BAN/,/sudo tee/p' "$ROOT_DIR/setup-security.sh")"
+grep -q 'echo "\[sshd\]"' <<< "$JAIL_TEMPLATE" || fail "fail2ban drop-in lost its [sshd] section"
+! grep -q 'echo "\[DEFAULT\]"' <<< "$JAIL_TEMPLATE" || \
+    fail "fail2ban drop-in writes a global [DEFAULT] section"
+grep -q 'port.*RIG_SSH_PORT' <<< "$JAIL_TEMPLATE" || fail "fail2ban jail does not follow RIG_SSH_PORT"
+
+# fail2ban state round-trips through export-config JSON.
+EXPORT_HOME="$TEST_TMP/export-home"
+mkdir -p "$EXPORT_HOME/.config/rig"
+printf 'RIG_FAIL2BAN="yes"\nRIG_SSH_PORT="2222"\n' > "$EXPORT_HOME/.config/rig/config"
+HOME="$EXPORT_HOME" bash "$ROOT_DIR/export-config.sh" >/dev/null
+[[ "$(jq -r '.config.system.fail2ban' "$EXPORT_HOME/.rig/rig-config.json")" == "yes" ]] || \
+    fail "export did not emit config.system.fail2ban"
+
 # Backups are centralized below the user's Rig data directory, including
 # copies of privileged source files. Mock sudo keeps this test unprivileged.
 BACKUP_SOURCE="$TEST_TMP/system-config"
@@ -186,6 +204,7 @@ cat > "$IMPORT_CASE/install.sh" <<'EOF'
 set -euo pipefail
 printf '%s\n' "$*" > "$HOME/install-args"
 printf '%s' "${RIG_PUBLIC_TCP-unset}" > "$HOME/imported-public-tcp"
+printf '%s' "${RIG_FAIL2BAN-unset}" > "$HOME/imported-fail2ban"
 EOF
 cat > "$IMPORT_CASE/rig-config.json" <<'EOF'
 {
@@ -197,7 +216,8 @@ cat > "$IMPORT_CASE/rig-config.json" <<'EOF'
       "profile": "minimal",
       "public_tcp": "",
       "public_udp": "",
-      "warn_undeclared_ports": "no"
+      "warn_undeclared_ports": "no",
+      "fail2ban": "yes"
     }
   }
 }
@@ -208,6 +228,8 @@ grep -q '^RIG_PROFILE="minimal"$' "$TEST_TMP/home/rig.conf" || fail "import did 
 grep -q '^RIG_COMPONENTS="shell"$' "$TEST_TMP/home/rig.conf" || fail "import did not persist components"
 grep -q '^RIG_PUBLIC_TCP=""$' "$TEST_TMP/home/rig.conf" || fail "import did not persist an empty public list"
 [[ "$(cat "$TEST_TMP/home/imported-public-tcp")" == "" ]] || fail "empty imported list was not exported"
+grep -q '^RIG_FAIL2BAN="yes"$' "$TEST_TMP/home/rig.conf" || fail "import did not persist fail2ban"
+[[ "$(cat "$TEST_TMP/home/imported-fail2ban")" == "yes" ]] || fail "import did not export RIG_FAIL2BAN to the installer"
 grep -q '^--components shell$' "$TEST_TMP/home/install-args" || fail "import did not invoke installer correctly"
 
 echo "config/security regression tests passed"

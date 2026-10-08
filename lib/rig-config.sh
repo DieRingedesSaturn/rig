@@ -60,6 +60,7 @@ RIG_CONFIG_KEYS=(
     RIG_PUBLIC_UDP
     RIG_CHECK_LISTENING_PORTS
     RIG_WARN_UNDECLARED_PORTS
+    RIG_FAIL2BAN
 )
 
 # rig_config_file - Print the path of the config file in use.

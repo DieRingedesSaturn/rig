@@ -786,6 +786,39 @@ print_security_report() {
         printf "  ${RED}✘${NC} %-22s %s\n" "Firewall" "inactive / not running"
     fi
 
+    # fail2ban — service state is readable unprivileged via systemctl; on
+    # non-systemd hosts (or when is-active lies about "unknown") fall back to
+    # the client socket. Socket access needs root, so probes use sudo -n
+    # (cached creds only) first and never prompt.
+    if ! is_macos; then
+        if command -v fail2ban-client >/dev/null 2>&1; then
+            local f2b_state f2b_banned="" f2b_jail_out=""
+            f2b_state="$(systemctl is-active fail2ban 2>/dev/null || echo "unknown")"
+            if [[ "$f2b_state" != "active" ]] \
+                && { sudo -n fail2ban-client ping >/dev/null 2>&1 \
+                     || fail2ban-client ping >/dev/null 2>&1; }; then
+                f2b_state="active"
+            fi
+            if [[ "$f2b_state" == "active" ]]; then
+                f2b_jail_out="$(sudo -n fail2ban-client status sshd 2>/dev/null \
+                    || fail2ban-client status sshd 2>/dev/null || true)"
+                if [[ -n "$f2b_jail_out" ]]; then
+                    f2b_banned="$(printf '%s\n' "$f2b_jail_out" \
+                        | grep 'Currently banned' | grep -o '[0-9]*' | head -1 || true)"
+                    printf "  ${GREEN}✔${NC} %-22s %s\n" "fail2ban" "active (sshd jail${f2b_banned:+, ${f2b_banned} banned})"
+                else
+                    printf "  ${GREEN}✔${NC} %-22s %s\n" "fail2ban" "active"
+                fi
+            else
+                printf "  ${YELLOW}⚠${NC} %-22s %s\n" "fail2ban" "installed ($f2b_state)"
+            fi
+        elif [[ "$(rig_config_get RIG_FAIL2BAN "no")" == "yes" ]]; then
+            printf "  ${YELLOW}⚠${NC} %-22s %s\n" "fail2ban" "enabled in config but not installed"
+        else
+            printf "  ${DIM}○${NC} %-22s %s\n" "fail2ban" "not installed (RIG_FAIL2BAN=no)"
+        fi
+    fi
+
     # Tailscale
     if command -v tailscale >/dev/null 2>&1; then
         local ts_ip

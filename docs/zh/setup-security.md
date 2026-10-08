@@ -27,6 +27,7 @@
 | 防火墙 | 自动探测后端（Debian/Ubuntu/Arch 用 `ufw`，Fedora/RHEL 用 `firewalld`）；默认入站 `deny`、出站 `allow` |
 | 公网端口 | 开放 `RIG_PUBLIC_TCP` / `RIG_PUBLIC_UDP`；从配置中移除的端口会被对账清理 |
 | Tailscale 模式 | SSH 端口绑定到独立的 `rig-tailscale` DROP zone（firewalld）或 `in on tailscale0`（ufw） |
+| fail2ban | 可选开关（`RIG_FAIL2BAN=yes` 或交互询问）：安装 fail2ban——RHEL 系基础源不带，会经 EPEL 安装——并写入 `jail.d/rig-sshd.conf` drop-in 守护当前 SSH 端口（10 分钟内 5 次失败 → 封禁 1 小时，回环地址已白名单）。改回 `no` 会移除该 drop-in 并 reload fail2ban，软件包保留 |
 | 端口审计 | 将 `ss -lntup` 监听者与声明策略 + 防火墙实际规则做双层比对 |
 
 ## 防火墙行为
@@ -54,6 +55,7 @@
 | `RIG_PUBLIC_UDP` | _(空)_ | 逗号分隔的公网 UDP 端口 |
 | `RIG_CHECK_LISTENING_PORTS` | `yes` | 是否执行监听端口审计 |
 | `RIG_WARN_UNDECLARED_PORTS` | `yes` | 对未声明却暴露的监听者发出警告 |
+| `RIG_FAIL2BAN` | `no` | `yes` 时安装并启用 fail2ban 的 sshd jail（非交互运行需显式 `yes`；macOS 跳过） |
 | `RIG_SSH_TEST_CONTEXT` | 当前 SSH 连接 / localhost | 可选 `host=...,addr=...,laddr=...,lport=...`；Rig 自动填写 `user` |
 
 ## 修改的文件
@@ -61,13 +63,14 @@
 | 文件 | 说明 |
 |------|------|
 | `/etc/ssh/sshd_config` | 每次改动前备份至 `~/.local/share/rig/backups/system/` |
+| `/etc/fail2ban/jail.d/rig-sshd.conf` | `RIG_FAIL2BAN=yes` 时生成的托管 drop-in（绝不修改 jail.conf 本体）；改回 `no` 时移除 |
 | `~/.config/rig/config` | 持久化策略，仅在全部成功后写入 |
 
 ## 重复运行行为
 
 幂等：已存在的规则跳过，不再声明的端口被对账清除，`sshd_config` 每次重新渲染并预检。`--yes` / `--non-interactive` 跳过交互式策略询问。
 
-交互询问涵盖 SSH 访问范围、认证方式、端口与额外公网 TCP 端口。管理员公钥检查失败指候选配置的有效连接上下文；应检查对应的 `Match` 规则与认证限制后重试。
+交互询问涵盖 SSH 访问范围、认证方式、端口、额外公网 TCP 端口以及 fail2ban jail。管理员公钥检查失败指候选配置的有效连接上下文；应检查对应的 `Match` 规则与认证限制后重试。若自己的 IP 被 fail2ban 封禁，从其他路径（控制台 / 另一个 IP / tailnet 节点）登录后执行 `sudo fail2ban-client set sshd unbanip <ip>` 解封。
 
 ## 依赖
 

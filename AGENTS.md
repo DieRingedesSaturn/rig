@@ -174,6 +174,9 @@ RIG_PUBLIC_UDP=""
 # 端口审计
 RIG_CHECK_LISTENING_PORTS="yes"
 RIG_WARN_UNDECLARED_PORTS="yes"
+
+# fail2ban sshd 暴力破解防护（no=不安装；yes=安装并启用 jail）
+RIG_FAIL2BAN="no"
 ```
 
 ### 3.3 Security 诊断与状态输出范例

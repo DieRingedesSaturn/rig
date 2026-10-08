@@ -316,6 +316,7 @@ extract_config() {
     fw_default_out="${RIG_FIREWALL_DEFAULT_OUT:-allow}"
     check_listening_ports="${RIG_CHECK_LISTENING_PORTS:-yes}"
     warn_undeclared_ports="${RIG_WARN_UNDECLARED_PORTS:-yes}"
+    fail2ban="${RIG_FAIL2BAN:-no}"
 
     if command -v rig_config_get >/dev/null 2>&1; then
         rig_profile="$(rig_config_get RIG_PROFILE "$rig_profile")"
@@ -332,6 +333,7 @@ extract_config() {
         fw_default_out="$(rig_config_get RIG_FIREWALL_DEFAULT_OUT "$fw_default_out")"
         check_listening_ports="$(rig_config_get RIG_CHECK_LISTENING_PORTS "$check_listening_ports")"
         warn_undeclared_ports="$(rig_config_get RIG_WARN_UNDECLARED_PORTS "$warn_undeclared_ports")"
+        fail2ban="$(rig_config_get RIG_FAIL2BAN "$fail2ban")"
     fi
 
     json+=$'    "system": {\n'
@@ -364,6 +366,8 @@ extract_config() {
     json+="$(json_kv "check_listening_ports" "$check_listening_ports")"
     json+=$',\n'
     json+="$(json_kv "warn_undeclared_ports" "$warn_undeclared_ports")"
+    json+=$',\n'
+    json+="$(json_kv "fail2ban" "$fail2ban")"
     json+=$'\n    }\n'
 
     json+=$'  }\n'
