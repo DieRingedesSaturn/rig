@@ -199,6 +199,35 @@ rig_can_prompt() {
     (exec 3<>/dev/tty) 2>/dev/null
 }
 
+# rig_version_ge HAVE WANT - True when MAJOR.MINOR(HAVE) >= MAJOR.MINOR(WANT).
+# Inputs like "3.2", "0.10", "3.10.1"; a missing minor counts as 0 and
+# non-numeric parts count as 0. Numeric, not lexical: 3.10 > 3.9.
+rig_version_ge() {
+    local have="$1" want="$2"
+    local h_maj h_min w_maj w_min
+
+    h_maj="${have%%.*}"
+    if [[ "$have" == *.* ]]; then
+        h_min="${have#*.}"; h_min="${h_min%%.*}"
+    else
+        h_min="0"
+    fi
+    w_maj="${want%%.*}"
+    if [[ "$want" == *.* ]]; then
+        w_min="${want#*.}"; w_min="${w_min%%.*}"
+    else
+        w_min="0"
+    fi
+
+    [[ "$h_maj" =~ ^[0-9]+$ ]] || h_maj=0
+    [[ "$h_min" =~ ^[0-9]+$ ]] || h_min=0
+    [[ "$w_maj" =~ ^[0-9]+$ ]] || w_maj=0
+    [[ "$w_min" =~ ^[0-9]+$ ]] || w_min=0
+
+    # 10# forces base-10 so "08"/"09" are not read as octal.
+    (( 10#$h_maj > 10#$w_maj || (10#$h_maj == 10#$w_maj && 10#$h_min >= 10#$w_min) ))
+}
+
 # --- Auto-detect on source ---------------------------------------------------
 
 detect_os

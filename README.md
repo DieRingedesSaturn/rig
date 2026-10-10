@@ -21,15 +21,15 @@ Automated baseline manager and lightweight VPS state manager for Linux and macOS
    - **`/etc/ssh/sshd_config`**: Applies `PermitRootLogin no`, `PasswordAuthentication no`, `PubkeyAuthentication yes`, and custom ports, guarded by preflight syntax validation (`sshd -t`);
    - **Firewall Policy**: Sets default inbound deny (`deny incoming`) and outbound allow (`allow outgoing`), pre-opens the SSH port (restricted to `tailscale0`, using a dedicated firewalld zone when needed), and opens declared public ports (e.g. `80/tcp`, `443/tcp`);
    - **User Configurations**:
-     - `~/.config/nvim/init.lua`: Writes a dependency-free, high-performance single-file Lua configuration (Everforest 16-color ANSI palette, adaptive Wayland / OSC 52 clipboard), configures default system editor (`EDITOR`, `VISUAL`, `SUDO_EDITOR`, `update-alternatives`) to `nvim`, and sets `alias vim=nvim`;
+     - `~/.config/nvim/init.lua`: Writes a dependency-free single-file Lua configuration decided for this host (terminal-palette colors; system clipboard on a desktop, copy-only OSC 52 over SSH/headless), configures default system editor (`EDITOR`, `VISUAL`, `SUDO_EDITOR`, `update-alternatives` on Debian) to `nvim`, and sets `alias vim=nvim`;
      - `~/.config/starship.toml`: Writes a clean, modern prompt configuration (repo-anchored directory path, trailing `[HH:MM]` timestamp, Python venv & Node.js runtime aware);
-     - `~/.tmux.conf`: Configures mouse wheel support, large scrollback buffers, and auto-adapts clipboard integration (`wl-copy` on Wayland, `xclip` on X11, `pbcopy` on macOS, and OSC 52 on headless VPS);
+     - `~/.tmux.conf`: Configures mouse wheel support and large scrollback buffers, matches option syntax to the installed tmux version, and auto-adapts clipboard integration (`wl-copy` on Wayland, `xclip` on X11, `pbcopy` on macOS, and OSC 52 on headless VPS);
      - `~/.gitconfig`: Sets `init.defaultBranch=main`, `pull.rebase=true`, and user identity;
      - `~/.ssh/config`: Injects a `Host github.com` block routing git SSH via `ssh.github.com:443` + `corkscrew` when `SSH_PROXY_PORT` is set;
      - `~/.config/rig/config`: Persists host-level component profiles and baseline settings.
 
 4. **Safety Guarantees & Non-Invasive Constraints**
-   - **Zero Unprompted Overwrites**: Existing files such as `~/.zshrc`, `~/.tmux.conf`, `~/.config/starship.toml`, and `~/.config/nvim` are never overwritten; missing snippets are reported as a checklist;
+   - **Zero Unprompted Overwrites**: `~/.zshrc` only gets missing lines appended after an explicit `y/N` confirmation with a backup; `~/.tmux.conf`, `~/.config/starship.toml`, and `~/.config/nvim/init.lua` get a diff plus an explicit keep/overwrite choice (append is also offered for tmux); every write is preceded by a timestamped backup and non-interactive runs keep the existing file;
    - **Anti-Lockout Gate**: Strictly refuses to disable root SSH login or password authentication unless a non-root admin user with verified `sudo` rights and working SSH public key is present;
    - **Data Preservation**: The uninstaller preserves `~/.nvm` (protecting all installed Node versions and global packages) and `~/.ssh/` keys by default, including under `--yes` / `--force`. Deleting nvm data requires `--remove-node-data`.
 
@@ -133,13 +133,13 @@ Via proxy:
 curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-shell.sh | bash
 ```
 
-**This component never edits files it did not create.** `~/.zshrc` is read but never written; `~/.config/starship.toml` is only created when absent (an existing config is never overwritten, not even to apply a preset); your login shell is reported but never changed. Anything that would require editing your files is printed as a checklist to run yourself.
+**This component never touches your files without asking.** `~/.zshrc` gets missing plugin/Starship init lines appended only after an explicit `y/N` confirmation (backup first); `~/.config/starship.toml` is created when absent and an existing one gets a diff with keep/overwrite/diff (backup before overwrite); your login shell is changed only after an explicit `y/N`. Without a TTY, everything that would touch your files is printed as a checklist to run yourself.
 
 See [docs/setup-shell.md](docs/setup-shell.md).
 
 #### Tmux (`setup-tmux.sh`)
 
-Installs [tmux](https://github.com/tmux/tmux) and, only when no configuration exists yet, writes a minimal `~/.tmux.conf`: extended keys, mouse support, a large scrollback, and a clipboard binding chosen for the machine. No TPM, no Catppuccin, no plugins.
+Installs [tmux](https://github.com/tmux/tmux) and, only when no configuration exists yet, writes a minimal `~/.tmux.conf` decided for this machine: mouse support, a large scrollback, option syntax matching the installed tmux version, and clipboard handling chosen for the session. No TPM, no Catppuccin, no plugins.
 
 Requires `sudo` on Linux.
 
@@ -153,7 +153,7 @@ Via proxy:
 curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-tmux.sh | bash
 ```
 
-**An existing `~/.tmux.conf` is never overwritten** — it is only read, and anything missing is printed as a checklist. The clipboard binding adapts to the machine: `wl-copy` on Wayland, `xclip` on X11, `pbcopy` on macOS, and OSC 52 (no external command) on a headless VPS.
+**An existing `~/.tmux.conf` is never touched without an explicit choice** — it is checked against the recommended baseline for this host's tmux version, a diff is shown, and keep/overwrite/append/diff is offered; overwrite and append take a timestamped backup, and non-interactive runs keep the file. The clipboard handling adapts to the machine: `wl-copy` on Wayland, `xclip` on X11, `pbcopy` on macOS, and OSC 52 (no external command) on a headless VPS.
 
 Config: `TMUX_MOUSE`, `TMUX_HISTORY_LIMIT` — see [Configuration Reference](#configuration-reference).
 
@@ -370,7 +370,7 @@ All environment variables across all scripts in one table.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RIG_CLIPBOARD_TOOL` | `auto` | Clipboard helper to install: `auto`, `pbcopy`, `wl-copy`, `xclip` or `none` |
+| `RIG_CLIPBOARD_TOOL` | `auto` | Clipboard helper to install and wire into the tmux/Neovim baselines: `auto`, `pbcopy`, `wl-copy`, `xclip` or `none` (`none` → OSC 52 only) |
 
 ### Containers
 
@@ -407,7 +407,7 @@ containers
 | `RIG_PROFILE` | `desktop` or `vps` |
 | `RIG_CONTAINER_ENGINE` | `auto`, `podman` or `docker` |
 | `RIG_CONTAINER_MODE` | `rootless` or `rootful` |
-| `RIG_CLIPBOARD_TOOL` | `auto`, `pbcopy`, `wl-copy`, `xclip` or `none` |
+| `RIG_CLIPBOARD_TOOL` | `auto`, `pbcopy`, `wl-copy`, `xclip` or `none` — also drives the tmux/Neovim baselines (`none` → OSC 52 only) |
 
 ### Tailscale
 

@@ -5,9 +5,10 @@ set -euo pipefail
 # Tmux Setup (lightweight)
 # https://github.com/DieRingedesSaturn/rig
 #
-# Installs tmux and, only when no configuration exists yet, writes a minimal
-# tmux.conf: extended keys, mouse support, a large scrollback, and a clipboard
-# binding that is correct for the machine it runs on.
+# Installs tmux and, only when no configuration exists yet, writes a baseline
+# tmux.conf decided for this machine: the option syntax matches the installed
+# tmux version and the clipboard handling matches the session (desktop helper
+# or OSC 52 on a headless host).
 #
 # Deliberately NOT a tmux framework installer: no TPM, no Catppuccin, no
 # plugin git clones. The config is a handful of lines you can read in one go.
@@ -29,8 +30,14 @@ source "$SCRIPT_DIR/lib/os-detect.sh"
 source "$SCRIPT_DIR/lib/pkg-maps.sh"
 # shellcheck source=lib/pkg-manager.sh
 source "$SCRIPT_DIR/lib/pkg-manager.sh"
+# shellcheck source=lib/rig-config.sh
+source "$SCRIPT_DIR/lib/rig-config.sh"
 # shellcheck source=lib/backup.sh
 source "$SCRIPT_DIR/lib/backup.sh"
+# shellcheck source=lib/tools.sh
+source "$SCRIPT_DIR/lib/tools.sh"
+# shellcheck source=lib/tmux.sh
+source "$SCRIPT_DIR/lib/tmux.sh"
 
 TMUX_MOUSE="${TMUX_MOUSE:-1}"
 TMUX_HISTORY_LIMIT="${TMUX_HISTORY_LIMIT:-100000}"
@@ -57,6 +64,29 @@ else
     echo "  installed: $(command -v tmux) ($(tmux -V 2>/dev/null))"
 fi
 
+TMUX_VER="$(tmux_version)"
+if ! rig_version_ge "$TMUX_VER" 2.4; then
+    echo ""
+    echo "  The rig baseline needs tmux 2.4 or newer; this host has $TMUX_VER."
+    echo "  Leaving any existing configuration untouched."
+    exit 0
+fi
+
+# Clipboard handling is decided per machine: a desktop helper when one fits
+# the session, OSC 52 on headless hosts. tmux runs before tools in the
+# install order, so the helper may still be missing — install it now.
+CLIP="$(tools_clipboard_tool)"
+if [[ -n "$CLIP" ]] && ! command -v "$CLIP" >/dev/null 2>&1; then
+    CLIP_PKG="$(tools_clipboard_package)"
+    if [[ -n "$CLIP_PKG" ]]; then
+        if pkg_install "$CLIP_PKG"; then
+            echo "  installed clipboard helper: $CLIP_PKG"
+        else
+            echo "  note: could not install $CLIP_PKG — clipboard copies will rely on OSC 52"
+        fi
+    fi
+fi
+
 # --- [2/3] Locate an existing configuration ---------------------------------
 
 # tmux 3.1+ prefers $XDG_CONFIG_HOME/tmux/tmux.conf and falls back to
@@ -78,103 +108,6 @@ else
 fi
 
 # --- [3/3] Write a starter config only when none exists ---------------------
-
-# Clipboard handling depends on the machine, so probe instead of guessing:
-#
-#   macOS            -> pbcopy
-#   Linux + Wayland  -> wl-copy      (package: wl-clipboard)
-#   Linux + X11      -> xclip        (package: xclip)
-#   headless / VPS   -> no external tool; rely on OSC 52 passthrough
-#
-# The headless case matters: a server has no display server, so a binding that
-# shells out to wl-copy or xclip would simply fail there.
-
-detect_clipboard() {
-    if is_macos; then
-        if command -v pbcopy >/dev/null 2>&1; then
-            echo "pbcopy"
-        fi
-        return 0
-    fi
-    if [[ -n "${WAYLAND_DISPLAY:-}" ]] && command -v wl-copy >/dev/null 2>&1; then
-        echo "wl-copy"
-        return 0
-    fi
-    if [[ -n "${DISPLAY:-}" ]] && command -v xclip >/dev/null 2>&1; then
-        echo "xclip -selection clipboard"
-        return 0
-    fi
-    return 0
-}
-
-CLIPBOARD_CMD="$(detect_clipboard)"
-
-generate_config() {
-    local conf_path="${1:-$TMUX_CONF}"
-    echo '# Rig Tmux Baseline'
-    echo '# ─── General ───'
-    echo '# NOTE: extended-keys/csi-u intentionally left off — apps that do not'
-    echo '# negotiate the kitty keyboard protocol (e.g. nvim < 0.10) then receive'
-    echo '# raw sequences like "^[[106;5u" for Ctrl+J/newlines. Opt in manually'
-    echo '# once every app in your stack speaks CSI-u:'
-    echo '#   set -g extended-keys on'
-    echo '#   set -g extended-keys-format csi-u'
-    echo 'set -as terminal-features ",*:RGB"'
-    echo 'set -g focus-events on'
-    echo 'set -g escape-time 0'
-    if [[ "$TMUX_MOUSE" == "1" ]]; then
-        echo 'set -g mouse on'
-    fi
-    echo "set -g history-limit $TMUX_HISTORY_LIMIT"
-    echo 'set -g base-index 1'
-    echo 'setw -g pane-base-index 1'
-    echo 'set -g renumber-windows on'
-    echo ''
-    echo '# ─── Key bindings ───'
-    echo 'setw -g mode-keys vi'
-    echo 'bind -T copy-mode-vi v send -X begin-selection'
-    echo 'bind -T copy-mode-vi y send -X copy-selection-and-cancel'
-    echo 'bind -T copy-mode-vi C-v send -X rectangle-toggle'
-    printf 'bind r source-file %s \\; display-message "tmux config reloaded"\n' "$conf_path"
-    echo 'bind | split-window -h'
-    echo 'bind - split-window -v'
-    echo ''
-    echo '# ─── Status line ───'
-    echo 'set -g status-interval 5'
-    echo 'set -g status-left-length 40'
-    echo 'set -g status-right-length 120'
-    echo 'set -g status-left "#[bold][#S]"'
-    echo 'set -g status-right "%Y-%m-%d %H:%M"'
-    echo ''
-    echo '# ─── Clipboard ───'
-    if [[ -n "$CLIPBOARD_CMD" ]]; then
-        echo "# Dragging a selection copies it via $CLIPBOARD_CMD"
-        printf 'bind -T copy-mode MouseDragEnd1Pane send -X copy-pipe-and-cancel "%s"\n' "$CLIPBOARD_CMD"
-        echo 'set -g set-clipboard on'
-        echo 'set -g allow-passthrough on'
-    else
-        echo '# No display server or clipboard helper found, so tmux talks to the'
-        echo '# terminal directly using OSC 52. Works over SSH with a terminal'
-        echo '# that supports it (kitty, Konsole, WezTerm, iTerm2, Ghostty, ...).'
-        echo 'set -g set-clipboard on'
-        echo 'set -g allow-passthrough on'
-    fi
-}
-
-show_diff() {
-    local old_file="$1"
-    local new_file="$2"
-    echo ""
-    echo "─── Configuration Diff (- existing / + recommended) ───"
-    if command -v git >/dev/null 2>&1; then
-        git diff --no-index --color=always "$old_file" "$new_file" || true
-    elif diff --help 2>&1 | grep -q -- '--color'; then
-        diff -u --color=always "$old_file" "$new_file" || true
-    else
-        diff -u "$old_file" "$new_file" || true
-    fi
-    echo "───────────────────────────────────────────────────────"
-}
 
 echo ""
 echo "[3/3] Tmux configuration..."
@@ -222,76 +155,22 @@ if [[ -n "$EXISTING_CONF" ]]; then
         fi
     done
 
+    if [[ "${#MISSING_CONF[@]}" -gt 0 ]]; then
+        echo "  Missing recommended options: ${MISSING_CONF[*]}"
+    fi
+
+    # Options the installed tmux would reject, and dead emacs-table bindings.
+    tmux_config_advisories "$EXISTING_CONF" "$TMUX_VER"
+
     TMP_BASELINE="$(mktemp "${TMPDIR:-/tmp}/rig-tmux-baseline.XXXXXX")"
-    generate_config "$EXISTING_CONF" > "$TMP_BASELINE"
+    tmux_baseline "$TMUX_VER" "$CLIP" "$EXISTING_CONF" "$TMUX_MOUSE" "$TMUX_HISTORY_LIMIT" > "$TMP_BASELINE"
 
-    # Compare existing with recommended baseline
-    if cmp -s "$EXISTING_CONF" "$TMP_BASELINE"; then
-        echo ""
-        echo "  ✔ $EXISTING_CONF already matches the recommended baseline perfectly."
-        rm -f "$TMP_BASELINE"
-    else
-        echo ""
-        echo "  Notice: $EXISTING_CONF differs from the recommended baseline."
-        show_diff "$EXISTING_CONF" "$TMP_BASELINE"
-
-        if rig_can_prompt; then
-            echo ""
-            echo "How would you like to handle your existing $EXISTING_CONF?"
-            echo "  [k] Keep existing configuration unchanged (default / safe)"
-            echo "  [o] Overwrite with recommended baseline (creates a Rig backup)"
-            echo "  [a] Append recommended baseline settings to end of file"
-            echo "  [d] Show diff again"
-            while true; do
-                read -r -p "Choice [K/o/a/d]: " choice </dev/tty || choice="k"
-                choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
-                case "$choice" in
-                    o|overwrite)
-                        BACKUP_CONF="$(rig_user_backup "$EXISTING_CONF" tmux)"
-                        cat "$TMP_BASELINE" > "$EXISTING_CONF"
-                        echo "  ✔ Backed up existing config to: $BACKUP_CONF"
-                        echo "  ✔ Overwrote $EXISTING_CONF with recommended baseline."
-                        break
-                        ;;
-                    a|append)
-                        BACKUP_CONF="$(rig_user_backup "$EXISTING_CONF" tmux)"
-                        {
-                            echo ""
-                            echo "# --- Appended by rig on $(date '+%Y-%m-%d %H:%M:%S') ---"
-                            cat "$TMP_BASELINE"
-                        } >> "$EXISTING_CONF"
-                        echo "  ✔ Backed up existing config to: $BACKUP_CONF"
-                        echo "  ✔ Appended baseline settings to $EXISTING_CONF."
-                        break
-                        ;;
-                    d|diff)
-                        show_diff "$EXISTING_CONF" "$TMP_BASELINE"
-                        ;;
-                    ""|k|keep)
-                        echo "  Keeping existing $EXISTING_CONF untouched."
-                        break
-                        ;;
-                    *)
-                        echo "  Invalid choice: please enter k, o, a, or d."
-                        ;;
-                esac
-            done
-        else
-            echo "  Non-interactive terminal: keeping existing $EXISTING_CONF untouched (default)."
-            if [[ "${#MISSING_CONF[@]}" -gt 0 ]]; then
-                echo "  Missing recommended options: ${MISSING_CONF[*]}"
-            fi
-        fi
-        rm -f "$TMP_BASELINE"
-    fi
+    rig_offer_config_baseline "$EXISTING_CONF" "$TMP_BASELINE" tmux --allow-append
+    rm -f "$TMP_BASELINE"
 else
-    generate_config "$TMUX_CONF" > "$TMUX_CONF"
+    tmux_baseline "$TMUX_VER" "$CLIP" "$TMUX_CONF" "$TMUX_MOUSE" "$TMUX_HISTORY_LIMIT" > "$TMUX_CONF"
     echo "  created $TMUX_CONF"
-    if [[ -n "$CLIPBOARD_CMD" ]]; then
-        echo "  clipboard: $CLIPBOARD_CMD"
-    else
-        echo "  clipboard: OSC 52 (no display server or clipboard helper detected)"
-    fi
+    sed -n '2p' "$TMUX_CONF"
 fi
 
 echo ""

@@ -394,7 +394,8 @@ download_all_needed() {
     # Ensure lib/ directory exists for setup scripts to source
     mkdir -p "${TMPDIR_INSTALL}/lib"
     for lib_file in os-detect.sh pkg-maps.sh pkg-manager.sh rig-config.sh \
-                    containers.sh podman.sh docker.sh tools.sh firewall.sh security.sh backup.sh; do
+                    containers.sh podman.sh docker.sh tools.sh firewall.sh security.sh backup.sh \
+                    tmux.sh neovim.sh; do
         download_script "lib/${lib_file}" 2>/dev/null || true
     done
 

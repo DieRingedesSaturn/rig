@@ -9,7 +9,7 @@ This component is non-destructive by construction. Nothing is ever overwritten s
 | Path | Behaviour |
 |------|-----------|
 | `~/.zshrc` | Read-only by default. Missing plugin/Starship init lines are appended only after an explicit `y/N` confirmation, with a timestamped backup first. |
-| `~/.config/starship.toml` | Created when absent. An existing config triggers a diff + keep/overwrite/append prompt; overwrite/append take a timestamped backup first. |
+| `~/.config/starship.toml` | Created when absent. An existing config triggers a diff + keep/overwrite/diff prompt; overwrite takes a timestamped backup first. |
 | Default login shell | Reported; changed via `chsh` only after an explicit `y/N` confirmation. |
 | Packages | Installed via the distro package manager only. The sole exception is the Starship fallback below. |
 
@@ -44,7 +44,7 @@ Package names are resolved through `lib/pkg-maps.sh`, so the same abstract names
 | 1/5 | Install `zsh` and `curl` (skipped on macOS, where both are built in). Then best-effort install `starship`, `zsh-autosuggestions`, `zsh-syntax-highlighting`; a package the distro does not ship is reported, not fatal |
 | 2/5 | Ensure Starship exists. If the package manager could not provide it, run the upstream installer into `~/.local/bin` |
 | 3/5 | Probe for the plugin files. Package managers disagree about where they land, so a candidate list is searched rather than one path hardcoded |
-| 4/5 | Create `~/.config/starship.toml` when missing; existing files get the diff + keep/overwrite/append menu |
+| 4/5 | Create `~/.config/starship.toml` when missing; existing files get the diff + keep/overwrite/diff menu |
 | 5/5 | Read `~/.zshrc` and report: which plugins it loads, whether the Starship init line is present, whether zsh is the login shell, and any line-order advisory. Missing init lines and a non-zsh login shell can be fixed on the spot via `y/N` prompts (backup first) |
 
 ## Plugin Locations Probed

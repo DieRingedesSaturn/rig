@@ -302,6 +302,11 @@ jobs:
             deps: ""
             verify: "tmux"
 
+          - component: neovim
+            script: setup-neovim.sh
+            deps: ""
+            verify: "nvim"
+
           - component: git
             script: setup-git.sh
             deps: ""
@@ -382,6 +387,25 @@ jobs:
           done
           exit $failed
 
+      # The baseline generators promise that everything they emit parses on
+      # the tool version that was present at setup time.
+      - name: Generated config loads clean
+        if: matrix.component == 'tmux' || matrix.component == 'neovim'
+        shell: bash
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          if [[ "${{ matrix.component }}" == "tmux" ]]; then
+            out=$(tmux -L cigenerated -f /dev/null start-server \; source-file "$HOME/.tmux.conf" \; kill-server 2>&1 || true)
+          else
+            out=$(nvim --headless -c 'qa!' 2>&1)
+          fi
+          if [[ -n "$out" ]]; then
+            echo "✘ generated config printed output:"
+            echo "$out"
+            exit 1
+          fi
+          echo "✔ generated ${{ matrix.component }} config loads clean"
+
       - name: Idempotency re-run
         if: matrix.component == 'tools'
         shell: bash
@@ -446,6 +470,7 @@ jobs:
           for script in rig *.sh lib/*.sh tests/*.sh; do /bin/bash -n "$script" || exit 1; done
           /bin/bash tests/test-config-security.sh
           /bin/bash tests/test-audit-regressions.sh
+          /bin/bash tests/test-baselines.sh
 
       - name: Verify commands
         if: matrix.verify != ''
@@ -765,6 +790,7 @@ jobs:
         run: |
           bash tests/test-config-security.sh
           bash tests/test-audit-regressions.sh
+          bash tests/test-baselines.sh
 
       - name: "Test: uninstall.sh — help"
         run: |
@@ -779,3 +805,47 @@ jobs:
           output=$(bash uninstall.sh --components tailscale --yes 2>&1) || true
           echo "$output"
           echo "✔ uninstall.sh handles non-installed components"
+
+  # ── Job 7: Baseline compatibility matrix ─────────────────────────────────
+  # Generates every tmux/init.lua variant and parses each with the tmux and
+  # neovim that distro actually ships, so a released distro version can never
+  # receive a config it cannot load.
+  baseline-compat:
+    name: baseline-compat (${{ matrix.image }})
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu:22.04
+            install: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tmux neovim ncurses-bin
+          - image: ubuntu:24.04
+            install: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tmux neovim ncurses-bin
+          - image: debian:12
+            install: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tmux neovim ncurses-bin
+          - image: debian:13
+            install: apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tmux neovim ncurses-bin
+          # EPEL only ships neovim 0.8 for EL8/9, below the 0.9 minimum —
+          # the live-nvim half of the test file skips there on purpose.
+          - image: rockylinux/rockylinux:8
+            install: dnf install -y tmux ncurses
+          - image: rockylinux/rockylinux:9
+            install: dnf install -y tmux ncurses
+          - image: fedora:latest
+            install: dnf install -y tmux neovim ncurses
+          - image: archlinux:latest
+            install: pacman -Sy --noconfirm tmux neovim ncurses
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install distro tmux/neovim
+        shell: bash
+        run: ${{ matrix.install }}
+
+      - name: Baseline tests
+        shell: bash
+        run: bash tests/test-baselines.sh

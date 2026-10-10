@@ -15,6 +15,8 @@ source "$SCRIPT_DIR/lib/rig-config.sh"
 source "$SCRIPT_DIR/lib/containers.sh"
 # shellcheck source=lib/backup.sh
 source "$SCRIPT_DIR/lib/backup.sh"
+# shellcheck source=lib/neovim.sh
+source "$SCRIPT_DIR/lib/neovim.sh"
 
 # =============================================================================
 # Rig Component Uninstaller
@@ -728,10 +730,27 @@ uninstall_neovim() {
         fi
     fi
 
-    if command -v nvim &>/dev/null; then
+    # The package is only removed when the package manager owns it; a static
+    # build under ~/.local is handled separately below.
+    if pkg_check_installed neovim; then
         pkg_remove neovim 2>/dev/null || true
         echo "  neovim package removed."
+    else
+        echo "  No neovim package installed by the package manager."
     fi
+
+    if nvim_is_static; then
+        rm -f "$HOME/.local/bin/nvim"
+        rm -rf "$HOME/.local/share/nvim-static"
+        echo "  Removed rig-installed static Neovim (~/.local/bin/nvim, ~/.local/share/nvim-static)."
+    fi
+
+    local rc_file
+    for rc_file in "$HOME/.zshrc" "$HOME/.bashrc"; do
+        if [[ -f "$rc_file" ]] && grep -q '# Added by rig setup-neovim' "$rc_file" 2>/dev/null; then
+            echo "  Note: editor exports added by setup-neovim were left in $rc_file."
+        fi
+    done
 }
 
 uninstall_security() {

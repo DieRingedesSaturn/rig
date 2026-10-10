@@ -73,6 +73,19 @@ rig_system_latest_backup() {
     printf '%s\n' "$latest"
 }
 
+# rig_files_identical A B - True when two files have identical contents.
+# Minimal container/VPS images can lack diffutils (cmp/diff) entirely, so
+# degrade to a pure-shell comparison rather than reporting a false difference.
+rig_files_identical() {
+    if command -v cmp >/dev/null 2>&1; then
+        cmp -s "$1" "$2"
+    elif command -v diff >/dev/null 2>&1; then
+        diff -q "$1" "$2" >/dev/null 2>&1
+    else
+        [[ "$(cat "$1")" == "$(cat "$2")" ]]
+    fi
+}
+
 # rig_config_diff OLD NEW - Show a colorized unified diff of two config files.
 rig_config_diff() {
     local old_file="$1" new_file="$2"
@@ -80,24 +93,33 @@ rig_config_diff() {
     echo "─── Configuration Diff (- existing / + recommended) ───"
     if command -v git >/dev/null 2>&1; then
         git diff --no-index --color=always "$old_file" "$new_file" || true
-    elif diff --help 2>&1 | grep -q -- '--color'; then
-        diff -u --color=always "$old_file" "$new_file" || true
+    elif command -v diff >/dev/null 2>&1; then
+        if diff --help 2>&1 | grep -q -- '--color'; then
+            diff -u --color=always "$old_file" "$new_file" || true
+        else
+            diff -u "$old_file" "$new_file" || true
+        fi
     else
-        diff -u "$old_file" "$new_file" || true
+        echo "(install diffutils or git to see the diff)"
     fi
     echo "───────────────────────────────────────────────────────"
 }
 
-# rig_offer_config_baseline TARGET BASELINE_FILE TAG
+# rig_offer_config_baseline TARGET BASELINE_FILE TAG [--allow-append]
 # Shared "existing config vs recommended baseline" decision flow: when TARGET
 # differs, show the diff and — whenever a controlling terminal exists (this
 # also works under `curl | bash` via /dev/tty) — offer keep / overwrite /
-# append / diff. Overwrite and append take a timestamped backup first.
+# diff, plus append only when the caller passed --allow-append. Overwrite and
+# append take a timestamped backup first.
+# Answers are read on fd 4, redirected from ${RIG_PROMPT_TTY:-/dev/tty} so a
+# test can feed answers from a file.
 # Non-interactive runs and "keep" leave TARGET untouched.
 rig_offer_config_baseline() {
     local target="$1" baseline="$2" tag="${3:-config}" choice backup
+    local allow_append=0
+    [[ "${4:-}" == "--allow-append" ]] && allow_append=1
     [[ -f "$target" && -f "$baseline" ]] || return 0
-    if cmp -s "$target" "$baseline"; then
+    if rig_files_identical "$target" "$baseline"; then
         echo "  ✔ $target already matches the recommended baseline."
         return 0
     fi
@@ -115,10 +137,16 @@ rig_offer_config_baseline() {
     echo "How would you like to handle your existing $target?"
     echo "  [k] Keep existing configuration unchanged (default / safe)"
     echo "  [o] Overwrite with recommended baseline (creates a Rig backup)"
-    echo "  [a] Append recommended baseline settings to end of file"
+    if [[ "$allow_append" == "1" ]]; then
+        echo "  [a] Append recommended baseline settings to end of file"
+    fi
     echo "  [d] Show diff again"
     while true; do
-        read -r -p "Choice [K/o/a/d]: " choice </dev/tty || choice="k"
+        if [[ "$allow_append" == "1" ]]; then
+            read -r -u 4 -p "Choice [K/o/a/d]: " choice || choice="k"
+        else
+            read -r -u 4 -p "Choice [K/o/d]: " choice || choice="k"
+        fi
         choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
         case "$choice" in
             o|overwrite)
@@ -129,15 +157,19 @@ rig_offer_config_baseline() {
                 return 0
                 ;;
             a|append)
-                backup="$(rig_user_backup "$target" "$tag")"
-                {
-                    echo ""
-                    echo "# --- Appended by rig on $(date '+%Y-%m-%d %H:%M:%S') ---"
-                    cat "$baseline"
-                } >> "$target"
-                echo "  ✔ Backed up existing config to: $backup"
-                echo "  ✔ Appended baseline settings to $target."
-                return 0
+                if [[ "$allow_append" == "1" ]]; then
+                    backup="$(rig_user_backup "$target" "$tag")"
+                    {
+                        echo ""
+                        echo "# --- Appended by rig on $(date '+%Y-%m-%d %H:%M:%S') ---"
+                        cat "$baseline"
+                    } >> "$target"
+                    echo "  ✔ Backed up existing config to: $backup"
+                    echo "  ✔ Appended baseline settings to $target."
+                    return 0
+                else
+                    echo "  Invalid choice: please enter k, o or d."
+                fi
                 ;;
             d|diff)
                 rig_config_diff "$target" "$baseline"
@@ -147,8 +179,12 @@ rig_offer_config_baseline() {
                 return 0
                 ;;
             *)
-                echo "  Invalid choice: please enter k, o, a, or d."
+                if [[ "$allow_append" == "1" ]]; then
+                    echo "  Invalid choice: please enter k, o, a, or d."
+                else
+                    echo "  Invalid choice: please enter k, o or d."
+                fi
                 ;;
         esac
-    done
+    done 4<"${RIG_PROMPT_TTY:-/dev/tty}"
 }

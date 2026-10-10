@@ -557,7 +557,8 @@ detect_neovim() {
     if nvim_path=$(resolve_cmd nvim); then
         status="installed"
         version=$("$nvim_path" --version 2>/dev/null | head -1 | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' || echo "installed")
-        if [[ -f "$HOME/.config/nvim/init.lua" ]]; then
+        local nvim_dir="${XDG_CONFIG_HOME:-$HOME/.config}/nvim"
+        if [[ -f "$nvim_dir/init.lua" || -f "$nvim_dir/init.vim" ]]; then
             config="configured"
         else
             config="install-only"

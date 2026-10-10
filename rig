@@ -29,7 +29,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # an installed rig keeps working when GitHub (or the configured proxy) is
 # unreachable.
 RIG_CACHE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/rig/scripts"
-RIG_LIB_FILES="os-detect.sh pkg-maps.sh pkg-manager.sh rig-config.sh containers.sh docker.sh podman.sh tools.sh firewall.sh security.sh backup.sh"
+RIG_LIB_FILES="os-detect.sh pkg-maps.sh pkg-manager.sh rig-config.sh containers.sh docker.sh podman.sh tools.sh firewall.sh security.sh backup.sh tmux.sh neovim.sh"
 
 # Prevent gh-proxy.org from rewriting these URLs in proxied content
 _GH="github.com"

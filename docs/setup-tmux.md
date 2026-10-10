@@ -1,6 +1,6 @@
 # setup-tmux.sh
 
-Installs tmux and, **only when no configuration exists yet**, writes a minimal `tmux.conf`: extended keys, mouse support, a large scrollback, and a clipboard binding that actually works on the machine it runs on.
+Installs tmux and, **only when no configuration exists yet**, writes a minimal `tmux.conf` decided for this machine: mouse support, a large scrollback, option syntax matching the installed tmux version, and clipboard handling chosen for the session. The generated file contains no runtime version or environment checks — everything was already decided when it was written.
 
 Deliberately **not** a tmux framework installer: no TPM, no Catppuccin, no plugin git clones. The config is a handful of lines you can read in one go.
 
@@ -19,46 +19,65 @@ Existing configurations are never overwritten without explicit interactive confi
 | Tool | Source |
 |------|--------|
 | tmux | Package manager (apt / dnf / yum / pacman / brew) |
+| `wl-copy` / `xclip` | Package manager, when the session calls for one and it is missing |
 
-**Not installed**: TPM, the Catppuccin theme, or any plugin. The previous version of this script installed six plugins and overwrote `~/.tmux.conf` outright.
+**Not installed**: TPM, the Catppuccin theme, or any plugin.
 
 ## Generated Template
 
-Written only when `~/.tmux.conf` is absent:
+Written only when `~/.tmux.conf` and `~/.config/tmux/tmux.conf` are absent. Two version tiers exist — everything shown is emitted at setup time for the tmux actually installed:
 
 ```tmux
 # ─── General ───
-# (extended-keys/csi-u intentionally left off — see note below)
-set -as terminal-features ",*:RGB"
+set -g default-terminal "tmux-256color"   # falls back to screen-256color when
+                                        # infocmp has no tmux-256color entry
+set -as terminal-features ",*:RGB"        # tmux >= 3.2
+# set -as terminal-overrides ",*:Tc"      # tmux < 3.2 instead
 set -g focus-events on
-set -g escape-time 0
+set -sg escape-time 10
 set -g mouse on
 set -g history-limit 100000
 set -g base-index 1
 # + vi copy-mode bindings, split keys, status line …
 
 # ─── Clipboard ───
-# chosen for this machine
+set -g set-clipboard on                   # copies also leave via OSC 52
+# desktop on tmux >= 3.2: set -s copy-command "<helper>"
+# desktop on tmux < 3.2:  Enter/MouseDragEnd1Pane copy-pipe bindings
+# headless:               nothing extra — OSC 52 does it all
 ```
+
+`extended-keys`/`csi-u` is **not** in the baseline: applications that never negotiate the kitty keyboard protocol (e.g. Neovim < 0.10) then receive raw sequences like `^[[106;5u`. Opt in manually once every app in your stack speaks CSI-u.
+
+## Version Tiers
+
+The emitted syntax follows the tmux found at setup time:
+
+| Option | tmux >= 3.2 | tmux < 3.2 |
+|--------|-------------|------------|
+| true colour | `set -as terminal-features ",*:RGB"` | `set -as terminal-overrides ",*:Tc"` |
+| desktop clipboard | `set -s copy-command "<helper>"` (y/Enter/mouse-drag all pipe to it) | explicit `copy-pipe-and-cancel "<helper>"` bindings for y/Enter/mouse-drag |
+
+`allow-passthrough` is never emitted (it needs tmux >= 3.3 and `set-clipboard` already covers the use case). Hosts below tmux 2.4 get no config at all — the baseline requires 2.4+.
 
 ## Clipboard Handling
 
-The bound command is **probed, never assumed**, because a hardcoded one fails silently elsewhere:
+The helper is **chosen by session detection**, never assumed — a hardcoded `xclip` binding fails silently on Wayland and on a headless server:
 
-| Environment | Binding written |
-|-------------|-----------------|
-| Linux + Wayland + `wl-copy` | `copy-pipe-and-cancel "wl-copy"` |
-| Linux + X11 + `xclip` | `copy-pipe-and-cancel "xclip -selection clipboard"` |
-| macOS + `pbcopy` | `copy-pipe-and-cancel "pbcopy"` |
-| Headless (VPS / SSH) | no binding; `set -g set-clipboard on` (OSC 52) instead |
+| Environment | Written |
+|-------------|---------|
+| macOS | `pbcopy` |
+| Linux + Wayland | `wl-copy` |
+| Linux + X11 | `xclip -selection clipboard` |
+| Headless (VPS / SSH) | no helper binding; `set -g set-clipboard on` (OSC 52) only |
 
-**The headless branch matters.** A server has no display server, so a binding that shells out to `wl-copy` or `xclip` would just fail at copy time. OSC 52 uses terminal escape sequences instead and works over SSH with any terminal that supports it (kitty, Konsole, WezTerm, iTerm2, Ghostty, ...).
+Force or disable the choice with `RIG_CLIPBOARD_TOOL=auto|pbcopy|wl-copy|xclip|none`. `none` yields the headless (OSC 52) profile even on a desktop.
 
 ## Existing Configuration
 
-If `~/.tmux.conf` or `~/.config/tmux/tmux.conf` already exists, the script performs a baseline check (`mouse`, `history-limit`, `clipboard`; an existing `extended-keys` gets a compatibility note) and compares your file with the recommended baseline for your system:
+If `~/.tmux.conf` or `~/.config/tmux/tmux.conf` already exists, the script performs a baseline check (`mouse`, `history-limit`, `clipboard`; an existing `extended-keys` gets a compatibility note), warns about options the installed tmux cannot honour (e.g. `allow-passthrough` on tmux < 3.3) and about `copy-pipe` bindings in the emacs `copy-mode` table that never run under `mode-keys vi`, then compares your file with the recommended baseline for your machine:
 
-1. **Exact match**: reports that the file already matches recommended baseline;
+1. **Exact match**: reports that the file already matches the recommended baseline;
 2. **Differences found**: renders a colorized Unified Diff via `git diff`;
 3. **Decision flow**:
    - **Interactive TTY**: presents an interactive prompt:
@@ -67,6 +86,8 @@ If `~/.tmux.conf` or `~/.config/tmux/tmux.conf` already exists, the script perfo
      - `[a] Append`: creates the centralized backup, then appends baseline settings to the end of the file;
      - `[d] Diff`: prints the colorized diff again.
    - **Non-interactive (CI / pipe)**: safely falls back to `Keep` and prints checklist advice.
+
+Comment lines are ignored throughout, so a commented-out entry is never mistaken for an active one.
 
 ### Clipboard advisory
 
@@ -78,14 +99,13 @@ If the config calls a command that is not installed here, it says so plainly:
         Or drop the binding and use: set -g set-clipboard on (OSC 52).
 ```
 
-Comment lines are ignored, so a commented-out entry is never mistaken for an active one.
-
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TMUX_MOUSE` | `1` | Set to `0` to omit `set -g mouse on` |
 | `TMUX_HISTORY_LIMIT` | `100000` | Scrollback buffer size |
+| `RIG_CLIPBOARD_TOOL` | `auto` | Clipboard helper to install and write into the config: `auto`, `pbcopy`, `wl-copy`, `xclip` or `none` |
 
 ## Re-run Behaviour
 
@@ -99,4 +119,4 @@ Fully idempotent. Already-installed packages are skipped, existing configuration
 ## Notes
 
 - tmux 3.1+ prefers `$XDG_CONFIG_HOME/tmux/tmux.conf` and falls back to `~/.tmux.conf`. Either one counts as "you already have a config".
-- `extended-keys`/`csi-u` is **not** in the baseline: applications that never negotiate the kitty keyboard protocol (e.g. Neovim < 0.10) then receive raw sequences like `^[[106;5u` for Ctrl+J/newlines. If every app in your stack speaks CSI-u, opt in manually with `set -g extended-keys on` + `set -g extended-keys-format csi-u`.
+- The default `default-terminal` is `tmux-256color` when `infocmp` finds that terminfo entry (modern ncurses ships it), otherwise `screen-256color`.

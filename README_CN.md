@@ -21,15 +21,15 @@ Linux 和 macOS 自动化配置与轻量级 VPS 主机状态管理器 (Personal 
    - **`/etc/ssh/sshd_config`**：在通过 `sshd -t` 语法预检的前提下，写入 `PermitRootLogin no`、`PasswordAuthentication no`、`PubkeyAuthentication yes`；
    - **防火墙策略**：配置默认入站拒绝（`deny incoming`）、出站允许（`allow outgoing`），先放行 SSH 端口（限定 `tailscale0`，firewalld 使用独立的接口区域），再放行声明的业务端口（如 `80/tcp`, `443/tcp`）；
    - **用户级配置文件**：
-     - `~/.config/nvim/init.lua`：写入零插件依赖的现代单文件 Lua 配置（Everforest 终端 16 色调色、本地与远程 OSC 52 剪贴板自适应），并将系统默认编辑器（`EDITOR`, `VISUAL`, `SUDO_EDITOR`, `update-alternatives`）设为 `nvim`，配置 `alias vim=nvim`；
+     - `~/.config/nvim/init.lua`：按当前机器情况生成零插件依赖的单文件 Lua 配置（终端调色板配色；桌面会话用系统剪贴板，SSH/无头环境用单向 OSC 52），并将系统默认编辑器（`EDITOR`, `VISUAL`, `SUDO_EDITOR`，Debian 系上的 `update-alternatives`）设为 `nvim`，配置 `alias vim=nvim`；
      - `~/.config/starship.toml`：写入简洁现代的终端提示符配置（Git 仓库路径锚定防超长、第一行尾随时间戳 `[HH:MM]`、感知 Python 虚拟环境与 Node.js 状态）；
-     - `~/.tmux.conf`：配置鼠标滚轮、大行数回滚缓冲，并自动适配系统剪贴板（Wayland 用 `wl-copy`、X11 用 `xclip`、macOS 用 `pbcopy`、无头服务器使用 OSC 52）；
+     - `~/.tmux.conf`：配置鼠标滚轮与大行数回滚缓冲，选项语法随已安装的 tmux 版本自适应，并自动适配系统剪贴板（Wayland 用 `wl-copy`、X11 用 `xclip`、macOS 用 `pbcopy`、无头服务器使用 OSC 52）；
      - `~/.gitconfig`：配置默认分支 `init.defaultBranch=main`、`pull.rebase=true` 及用户名和邮箱；
      - `~/.ssh/config`：设置 `SSH_PROXY_PORT` 时注入 `Host github.com` 块，让 git SSH 经 `ssh.github.com:443` + `corkscrew`；
      - `~/.config/rig/config`：持久化当前机器的组件清单与 Profile（如 `vps` 预设）。
 
 4. **安全底线与非侵入约束 (Safety Guarantees)**
-   - **绝不盲目覆盖用户配置**：若 `~/.zshrc`、`~/.config/starship.toml`、`~/.config/nvim` 已经存在，脚本仅做只读检查，绝不强制覆写；`setup-tmux.sh` 则提供彩色 Unified Diff 比对与交互式决策（支持保留原有 [Keep]、备份后覆盖 [Overwrite] 或追加 [Append]），杜绝任何暴力覆盖；
+   - **绝不盲目覆盖用户配置**：`~/.zshrc` 只在显式 `y/N` 确认并备份后追加缺失行；`~/.tmux.conf`、`~/.config/starship.toml`、`~/.config/nvim/init.lua` 在与基线不一致时展示彩色 Unified Diff 并等待显式选择（保留 [Keep]、备份后覆盖 [Overwrite]，tmux 额外提供追加 [Append]）；任何写入前都会自动做时间戳备份，非交互环境一律保留原文件，杜绝任何暴力覆盖；
    - **防失联硬性门禁 (Anti-Lockout)**：若未检测到具备 sudo 权限且拥有可用 SSH Key 的非 root 管理员，**程序硬性拒绝禁用 root 和密码登录**；
    - **数据资产防误删**：卸载时默认保护 `~/.nvm`（防止多版本 Node 与全局 npm 包丢失）及 `~/.ssh/` 密钥，`--yes` / `--force` 同样保留；仅显式使用 `--remove-node-data` 才删除 nvm 数据。
 
@@ -133,13 +133,13 @@ curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-
 curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-shell.sh | bash
 ```
 
-**这个组件绝不修改不是它自己创建的文件。** `~/.zshrc` 只读不写；`~/.config/starship.toml` 仅在缺失时创建（已存在就绝不覆盖，连应用预设都不会做）；默认 shell 只做报告、不做修改。任何需要改你文件才能完成的事，都会以清单形式打印出来让你自己决定。
+**这个组件不会未经许可改动你的文件。** `~/.zshrc` 中缺失的插件/Starship 初始化行仅在显式 `y/N` 确认后追加（先备份）；`~/.config/starship.toml` 缺失时创建，已存在则展示 diff 并提供 保留/覆盖/diff 菜单（覆盖前备份）；默认 shell 仅在显式 `y/N` 确认后才修改。没有 TTY 时，任何需要改你文件才能完成的事都会以清单形式打印出来让你自己决定。
 
 参考 [docs/zh/setup-shell.md](docs/zh/setup-shell.md)。
 
 #### Tmux (`setup-tmux.sh`)
 
-安装 [tmux](https://github.com/tmux/tmux)，并且**仅在没有任何配置存在时**写入一份最小 `~/.tmux.conf`：扩展按键、鼠标支持、大回滚缓冲，以及一个按机器实际情况选择的剪贴板绑定。没有 TPM、没有 Catppuccin、没有插件。
+安装 [tmux](https://github.com/tmux/tmux)，并且**仅在没有任何配置存在时**写入一份按当前机器情况生成的最小 `~/.tmux.conf`：鼠标支持、大回滚缓冲、与已安装 tmux 版本匹配的选项语法，以及按会话类型选择的剪贴板方案。没有 TPM、没有 Catppuccin、没有插件。
 
 Linux 下需要 `sudo`。
 
@@ -153,7 +153,7 @@ curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-
 curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/setup-tmux.sh | bash
 ```
 
-**已存在的 `~/.tmux.conf` 绝不覆盖** —— 只做读取检查，缺什么会打印成清单。剪贴板绑定随机器自适应：Wayland 用 `wl-copy`、X11 用 `xclip`、macOS 用 `pbcopy`、无头 VPS 用 OSC 52（不需要任何外部命令）。
+**已存在的 `~/.tmux.conf` 不会在未获许可时被改动** —— 脚本会把它与本机 tmux 版本对应的推荐基线比对并展示 diff，再提供 保留/覆盖/追加/diff 交互菜单；覆盖与追加都先自动备份，非交互环境一律保留原文件。剪贴板方案随机器自适应：Wayland 用 `wl-copy`、X11 用 `xclip`、macOS 用 `pbcopy`、无头 VPS 用 OSC 52（不需要任何外部命令）。
 
 配置项：`TMUX_MOUSE`、`TMUX_HISTORY_LIMIT` — 详见[配置速查表](#配置速查表)。
 
@@ -370,7 +370,7 @@ curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/DieRingedesSat
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `RIG_CLIPBOARD_TOOL` | `auto` | 要安装的剪贴板工具：`auto`、`pbcopy`、`wl-copy`、`xclip` 或 `none` |
+| `RIG_CLIPBOARD_TOOL` | `auto` | 要安装并接入 tmux/Neovim 基线的剪贴板工具：`auto`、`pbcopy`、`wl-copy`、`xclip` 或 `none`（`none` → 仅 OSC 52） |
 
 ### Containers
 
@@ -407,7 +407,7 @@ containers
 | `RIG_PROFILE` | `desktop` 或 `vps` |
 | `RIG_CONTAINER_ENGINE` | `auto`、`podman` 或 `docker` |
 | `RIG_CONTAINER_MODE` | `rootless` 或 `rootful` |
-| `RIG_CLIPBOARD_TOOL` | `auto`、`pbcopy`、`wl-copy`、`xclip` 或 `none` |
+| `RIG_CLIPBOARD_TOOL` | `auto`、`pbcopy`、`wl-copy`、`xclip` 或 `none` —— 同时决定 tmux/Neovim 基线的剪贴板方案（`none` → 仅 OSC 52） |
 
 ### Tailscale
 

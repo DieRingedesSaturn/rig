@@ -62,6 +62,7 @@ _load_lib "pkg-manager.sh"
 _load_lib "rig-config.sh"
 _load_lib "containers.sh"
 _load_lib "backup.sh"
+_load_lib "neovim.sh"
 
 # Restore shell options: lib files set -euo pipefail but update.sh must NOT use errexit
 set +e
@@ -460,6 +461,8 @@ update_tailscale() {
 update_neovim() {
     if is_macos; then
         brew upgrade neovim || return 1
+    elif nvim_is_static; then
+        nvim_static_install || return 1
     else
         pkg_update neovim || return 1
     fi
@@ -487,7 +490,7 @@ _run_repo_script() {
     mkdir -p "$tmpdir/lib"
     for lib_file in os-detect.sh pkg-maps.sh pkg-manager.sh rig-config.sh \
                     containers.sh docker.sh podman.sh tools.sh firewall.sh \
-                    security.sh backup.sh; do
+                    security.sh backup.sh tmux.sh neovim.sh; do
         url="${BASE_URL}/lib/${lib_file}"
         [[ -n "${GH_PROXY:-}" ]] && url="${GH_PROXY%/}/${url}"
         if ! curl -fsSL "$url" -o "$tmpdir/lib/$lib_file" 2>/dev/null; then

@@ -40,9 +40,13 @@ rig/
 │   ├── rig-config.sh        # 统一配置读写与 Profile 管理
 │   ├── firewall.sh          # 防火墙抽象层 (UFW / firewalld 统一管理)
 │   ├── security.sh          # 账号安全、sshd 语法校验与端口审计逻辑
-│   └── backup.sh            # 集中式配置备份管理库 (~/.local/share/rig/backups)
+│   ├── backup.sh            # 集中式配置备份管理库 (~/.local/share/rig/backups)
+│   ├── tmux.sh              # tmux 基线生成（按已装 tmux 版本分层）与存量配置告警
+│   └── neovim.sh            # init.lua 基线生成（桌面/无头档案）与官方二进制兜底安装
 ├── tests/                   # 自动化回归测试集
-│   └── test-config-security.sh # 配置与安全策略自动化测试
+│   ├── test-config-security.sh # 配置与安全策略自动化测试
+│   ├── test-audit-regressions.sh # 审计回归测试 (Python driver)
+│   └── test-baselines.sh    # tmux/Neovim 基线生成与兼容性测试
 └── docs/                    # 详细设计与使用文档
     ├── zh/                  # 中文文档
     └── ...                  # 英文文档
@@ -102,6 +106,8 @@ flowchart LR
 
 ### 2.4 现有配置文件比对与交互决策流 (由 `lib/backup.sh` 的 `rig_offer_config_baseline` 统一实现，tmux/starship/neovim 共用)
 
+仅 tmux 传 `--allow-append` 提供追加选项；starship 与 neovim 的菜单只有 Keep / Overwrite / Diff。
+
 ```mermaid
 flowchart TD
     T0[运行 setup-tmux.sh] --> T1[按宿主环境生成推荐 Baseline]
@@ -110,10 +116,10 @@ flowchart TD
     T2 -- 是 --> T4[执行 git diff 输出彩色 Unified Diff]
     T4 --> T5{处于 TTY 交互终端?}
     T5 -- 否 --> T6[安全回退: 保留现有配置 (Keep), 仅输出建议]
-    T5 -- 是 --> T7[交互菜单: [K]eep / [o]verwrite / [a]ppend / [d]iff]
+    T5 -- 是 --> T7["交互菜单: [K]eep / [o]verwrite / [d]iff（tmux 另有 [a]ppend）"]
     T7 -->|Keep| T6
     T7 -->|Overwrite| T8[集中备份至 ~/.local/share/rig/backups ➔ 全量覆盖为 Baseline]
-    T7 -->|Append| T9[集中备份至 ~/.local/share/rig/backups ➔ 追加 Baseline 配置至末尾]
+    T7 -->|"Append (仅 tmux)"| T9[集中备份至 ~/.local/share/rig/backups ➔ 追加 Baseline 配置至末尾]
     T7 -->|Diff| T4
 ```
 
@@ -207,3 +213,21 @@ tcp    8080    0.0.0.0       docker     ⚠ WARN: Exposed but not in RIG_PUBLIC_
 Warnings:
 [!] Port 8080 bound to 0.0.0.0 without explicit declaration. Change to 127.0.0.1:8080 in docker-compose.
 ```
+
+---
+
+## 4. 测试与验证
+
+与 CI (`.github/workflows/ci.yml`) 相同的本地验证入口：
+
+```bash
+# Lint (与 CI 相同的文件集合)
+shellcheck --severity=error setup-*.sh install.sh update.sh status.sh export-config.sh import-config.sh uninstall.sh rig lib/*.sh
+
+# 回归测试集
+bash tests/test-baselines.sh        # tmux/Neovim 基线生成、版本分层与存量配置告警
+bash tests/test-config-security.sh  # 配置读写与安全策略
+bash tests/test-audit-regressions.sh # 审计回归 (Python driver, 需 python3)
+```
+
+CI 另有 `baseline-compat` job，在 ubuntu:22.04/24.04、debian:12/13、rockylinux:8/9、fedora、archlinux 容器里跑 `tests/test-baselines.sh`，用发行版自带的 tmux/neovim 实机解析所有生成的配置变体。所有脚本需兼容 Bash 3.2（macOS CI 用 /bin/bash 跑全套测试）。
