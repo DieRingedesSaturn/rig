@@ -99,6 +99,64 @@ FIREWALL_ALLOWED="$(
 )"
 [[ "$FIREWALL_ALLOWED" == "22/tcp@tailscale, 80/tcp" ]] || fail "restricted firewall rules were reported incorrectly"
 
+FIREWALL_UFW_ALLOWED="$(
+    source "$ROOT_DIR/lib/firewall.sh"
+    ufw() {
+        if [[ "$1" == "status" ]]; then
+            cat <<'EOF'
+Status: active
+Logging: on (low)
+Default: deny (incoming), allow (outgoing), disabled (routed)
+
+To                         Action      From
+--                         ------      ----
+22/tcp                     ALLOW IN    Anywhere
+443/tcp                    ALLOW IN    Anywhere
+22/tcp (v6)                ALLOW IN    Anywhere (v6)
+EOF
+        else
+            return 1
+        fi
+    }
+    sudo() {
+        [[ "$1" == "-n" ]] && shift
+        "$@"
+    }
+    firewall_list_allowed ufw
+)"
+[[ "$FIREWALL_UFW_ALLOWED" == "22/tcp, 443/tcp" ]] || fail "ufw rules were reported incorrectly"
+
+# Debian's default non-root PATH omits /usr/sbin, so `command -v ufw` can fail
+# even though /usr/sbin/ufw is installed and the service is active. Status
+# detection must still consult the service state instead of returning early.
+(
+    source "$ROOT_DIR/lib/firewall.sh"
+    command() {
+        if [[ "${1:-}" == "-v" && "${2:-}" == "ufw" ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+    sudo() { return 1; }
+    systemctl() {
+        [[ "${1:-}" == "is-active" && "${2:-}" == "--quiet" && "${3:-}" == "ufw" ]]
+    }
+    firewall_is_active ufw
+) || fail "ufw outside PATH was not detected via systemctl"
+
+(
+    source "$ROOT_DIR/lib/firewall.sh"
+    command() {
+        if [[ "${1:-}" == "-v" && "${2:-}" == "ufw" ]]; then
+            return 1
+        fi
+        builtin command "$@"
+    }
+    sudo() { return 1; }
+    systemctl() { return 1; }
+    ! firewall_is_active ufw
+) || fail "inactive ufw was reported as active when it was outside PATH"
+
 # The documented `bash install.sh` form must use the current checkout rather
 # than silently fetching the moving remote branch.
 MOCK_BIN="$TEST_TMP/mock-bin"

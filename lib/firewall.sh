@@ -20,6 +20,25 @@ if [[ -n "${_LIB_FIREWALL_LOADED:-}" ]]; then
 fi
 _LIB_FIREWALL_LOADED=1
 
+# _firewall_find_cmd - Resolve a firewall CLI even when its sbin directory is
+# not in the invoking user's PATH. Debian's default non-root PATH omits
+# /usr/sbin, where both ufw and firewall-cmd usually live.
+_firewall_find_cmd() {
+    local name="$1" path
+
+    if path="$(command -v "$name" 2>/dev/null)"; then
+        printf '%s\n' "$path"
+        return 0
+    fi
+    for path in "/usr/sbin/$name" "/sbin/$name" "/usr/bin/$name" "/bin/$name"; do
+        if [[ -x "$path" ]]; then
+            printf '%s\n' "$path"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # firewall_detect_backend - Detect installed firewall or determine default for distro
 # Outputs: ufw, firewalld, or none
 firewall_detect_backend() {
@@ -32,11 +51,12 @@ firewall_detect_backend() {
         esac
     fi
 
-    # Check already running or installed tools first
-    if command -v ufw >/dev/null 2>&1; then
+    # Check already running or installed tools first. Resolve through common
+    # sbin paths: a normal user may not have /usr/sbin in PATH.
+    if _firewall_find_cmd ufw >/dev/null 2>&1; then
         echo "ufw"
         return 0
-    elif command -v firewall-cmd >/dev/null 2>&1; then
+    elif _firewall_find_cmd firewall-cmd >/dev/null 2>&1; then
         echo "firewalld"
         return 0
     fi
@@ -57,8 +77,8 @@ firewall_detect_backend() {
 firewall_is_installed() {
     local backend="$1"
     case "$backend" in
-        ufw) command -v ufw >/dev/null 2>&1 ;;
-        firewalld) command -v firewall-cmd >/dev/null 2>&1 ;;
+        ufw) _firewall_find_cmd ufw >/dev/null 2>&1 ;;
+        firewalld) _firewall_find_cmd firewall-cmd >/dev/null 2>&1 ;;
         *) return 1 ;;
     esac
 }
@@ -91,11 +111,11 @@ firewall_ensure_installed() {
 # treated as unusable and retried via sudo -n.
 _firewall_ro_cmd() {
     local out
-    if out="$("$@" 2>/dev/null)" && [[ -n "$out" ]]; then
+    if out="$(LC_ALL=C "$@" 2>/dev/null)" && [[ -n "$out" ]]; then
         printf '%s\n' "$out"
         return 0
     fi
-    sudo -n "$@" 2>/dev/null
+    LC_ALL=C sudo -n "$@" 2>/dev/null
 }
 
 # All mutations share one mode for an apply. Never start a stopped daemon just
@@ -242,32 +262,41 @@ firewall_restore() {
 
 # firewall_is_active - Check if the firewall service is actively filtering.
 # Read-only callers (status, audits) use sudo -n so they never block on a
-# password prompt; an unreadable backend reports as inactive.
+# password prompt; when the ruleset is unreadable, fall back to the service
+# state, which is readable without privileges (but coarser: a disabled ufw can
+# leave its oneshot unit active).
 firewall_is_active() {
-    local backend="$1"
+    local backend="$1" cli state
     case "$backend" in
         ufw)
-            if ! command -v ufw >/dev/null 2>&1; then
-                return 1
-            fi
-            # ufw status requires root; there is no unprivileged path.
-            if sudo -n ufw status 2>/dev/null | grep -qi "Status: active"; then
-                return 0
+            # ufw status requires root; there is no unprivileged path. Resolve
+            # the CLI through /usr/sbin as well: Debian's non-root PATH omits
+            # it, and returning early here used to hide an active firewall.
+            if cli="$(_firewall_find_cmd ufw)"; then
+                state="$(LC_ALL=C sudo -n "$cli" status 2>/dev/null || true)"
+                if grep -qi "Status: active" <<< "$state"; then
+                    return 0
+                fi
             fi
             # Cached creds may be absent in read-only contexts (status.sh,
-            # audits). The ufw service state is readable without privileges
-            # and only stays active while filtering is enabled.
+            # audits). The ufw service state is readable without privileges,
+            # though it is coarser: a disabled ufw can leave the unit active.
             if command -v systemctl >/dev/null 2>&1; then
-                systemctl is-active --quiet ufw 2>/dev/null
-                return
+                if systemctl is-active --quiet ufw 2>/dev/null; then
+                    return 0
+                fi
             fi
             return 1
             ;;
         firewalld)
-            if ! command -v firewall-cmd >/dev/null 2>&1; then
+            if ! cli="$(_firewall_find_cmd firewall-cmd)"; then
                 return 1
             fi
-            _firewall_ro_cmd firewall-cmd --state | grep -qi "running"
+            state="$(_firewall_ro_cmd "$cli" --state || true)"
+            if grep -qi "running" <<< "$state"; then
+                return 0
+            fi
+            return 1
             ;;
         *)
             return 1
@@ -457,7 +486,7 @@ firewall_reload() {
 # firewall_list_allowed - Return comma-separated list of allowed ports
 # Outputs: formatted string e.g. "22/tcp, 80/tcp, 443/tcp"
 firewall_list_allowed() {
-    local backend="$1"
+    local backend="$1" cli
     local allowed=()
 
     if ! firewall_is_active "$backend"; then
@@ -467,6 +496,7 @@ firewall_list_allowed() {
 
     case "$backend" in
         ufw)
+            cli="$(_firewall_find_cmd ufw)" || cli="ufw"
             # Parse `ufw status` output: "22/tcp ALLOW Anywhere"
             while read -r line; do
                 local port_proto
@@ -478,27 +508,28 @@ firewall_list_allowed() {
                         allowed+=("$port_proto")
                     fi
                 fi
-            done < <(sudo -n ufw status 2>/dev/null | grep -E "ALLOW" || true)
+            done < <(LC_ALL=C sudo -n "$cli" status 2>/dev/null | grep -E "ALLOW" || true)
             ;;
         firewalld)
+            cli="$(_firewall_find_cmd firewall-cmd)" || cli="firewall-cmd"
             local raw_ports
-            raw_ports="$(_firewall_ro_cmd firewall-cmd --list-ports || true)"
+            raw_ports="$(_firewall_ro_cmd "$cli" --list-ports || true)"
             for p in $raw_ports; do
                 allowed+=("$p")
             done
             # Service entries open ports too (stock "ssh" → 22/tcp); expand
             # them so the audit sees what is actually reachable.
             local svc svc_ports
-            for svc in $(_firewall_ro_cmd firewall-cmd --list-services || true); do
-                svc_ports="$(_firewall_ro_cmd firewall-cmd --service="$svc" --get-ports || true)"
+            for svc in $(_firewall_ro_cmd "$cli" --list-services || true); do
+                svc_ports="$(_firewall_ro_cmd "$cli" --service="$svc" --get-ports || true)"
                 for p in $svc_ports; do
                     [[ "$p" =~ ^[0-9]+/(tcp|udp)$ ]] && allowed+=("$p")
                 done
             done
             local tailscale_ports tailscale_ifaces
-            tailscale_ifaces="$(_firewall_ro_cmd firewall-cmd --zone=rig-tailscale --list-interfaces || true)"
+            tailscale_ifaces="$(_firewall_ro_cmd "$cli" --zone=rig-tailscale --list-interfaces || true)"
             if printf '%s\n' "$tailscale_ifaces" | tr ' ' '\n' | grep -qx 'tailscale0'; then
-                tailscale_ports="$(_firewall_ro_cmd firewall-cmd --zone=rig-tailscale --list-ports || true)"
+                tailscale_ports="$(_firewall_ro_cmd "$cli" --zone=rig-tailscale --list-ports || true)"
                 for p in $tailscale_ports; do
                     allowed+=("${p}@tailscale")
                 done
