@@ -80,7 +80,7 @@ flowchart TD
     S3 -- 是 --> S5[3. 渲染候选 sshd_config 并执行 sshd -t 预检]
     S5 --> S6{预检通过?}
     S6 -- 否 --> S4
-    S6 -- 是 --> S7[4. 保存防火墙快照\n先保护当前与目标 SSH 端口再设默认策略\n未运行的firewalld先离线准备规则]
+    S6 -- 是 --> S7[4. 保存防火墙快照\n先保护当前与目标 SSH 端口再设默认策略\n启用并启动 ufw.service（ufw 不管理 systemd unit）\n未运行的firewalld先离线准备规则]
     S7 --> S8[5. 备份并安装候选配置, 二次 sshd -t]
     S8 --> S9[6. 重载 sshd 服务]
     S9 --> S10{重载成功?}

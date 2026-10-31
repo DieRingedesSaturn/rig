@@ -32,7 +32,7 @@
 
 ## 防火墙行为
 
-- **ufw**：`allow <port>/tcp`，接口限制用 `in on tailscale0`，默认 `deny incoming` / `allow outgoing`。
+- **ufw**：`allow <port>/tcp`，接口限制用 `in on tailscale0`，默认 `deny incoming` / `allow outgoing`；同时 `enable` 并 `start` `ufw.service`（`ufw --force enable` 不会管理 systemd unit），确保重启后规则仍然生效。
 - **firewalld**：public zone 永久 `--add-port` 规则；移除默认放行的 `ssh`/`cockpit` service，使声明端口列表成为真实策略；Tailscale 限制使用绑定 `tailscale0` 的 `rig-tailscale` zone。
 - 对账：上次声明、本次从 `RIG_PUBLIC_TCP`/`RIG_PUBLIC_UDP` 移除的端口，其放行规则会被删除。
 - 未运行的 firewalld 先用 `firewall-offline-cmd` 准备规则，再启动；公共端口明确写入 `--zone=public`，运行中的默认 zone 在新规则加载后才切换。其他绑定接口/来源的 zone（Tailscale 与容器专用 zone 除外）需先人工核对策略，否则拒绝应用。

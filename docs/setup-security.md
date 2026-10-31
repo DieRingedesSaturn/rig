@@ -32,7 +32,7 @@ Current and target SSH ports are protected during the transition. Old rules are 
 
 ## Firewall Behavior
 
-- **ufw**: `allow <port>/tcp`, interface-restricted rules via `in on tailscale0`, `default deny incoming` / `allow outgoing`.
+- **ufw**: `allow <port>/tcp`, interface-restricted rules via `in on tailscale0`, `default deny incoming` / `allow outgoing`; the `ufw.service` unit is also enabled and started (`ufw --force enable` does not manage the systemd unit), so the ruleset survives a reboot.
 - **firewalld**: permanent `--add-port` rules in the public zone; default broad `ssh`/`cockpit` services are removed so the declared port list is the real policy; Tailscale restriction uses a `rig-tailscale` zone bound to `tailscale0`.
 - Reconciliation: ports dropped from `RIG_PUBLIC_TCP`/`RIG_PUBLIC_UDP` since the last run get their allow rules removed.
 - A stopped firewalld is configured with `firewall-offline-cmd` before startup. Public port rules always name `--zone=public`; a running daemon switches its default zone only after prepared rules are loaded. Other interface/source-bound zones (except the dedicated Tailscale and container zones) require manual policy review and cause preflight refusal.

@@ -39,6 +39,22 @@ _firewall_find_cmd() {
     return 1
 }
 
+# _firewall_systemd_running - true only when systemd is the init system.
+# Containers and WSL without systemd expose systemctl but cannot manage units.
+_firewall_systemd_running() {
+    command -v systemctl >/dev/null 2>&1 || return 1
+    systemctl show --property=Version >/dev/null 2>&1
+}
+
+# _firewall_ufw_unit_available - true when a ufw.service unit can be managed.
+# ufw --force enable only flips ENABLED in /etc/ufw/ufw.conf and loads rules
+# through ufw-init; it never touches the oneshot systemd unit, so the unit has
+# to be enabled/started separately or a reboot leaves the host unfiltered.
+_firewall_ufw_unit_available() {
+    _firewall_systemd_running || return 1
+    systemctl cat ufw.service >/dev/null 2>&1
+}
+
 # firewall_detect_backend - Detect installed firewall or determine default for distro
 # Outputs: ufw, firewalld, or none
 firewall_detect_backend() {
@@ -176,10 +192,14 @@ firewall_snapshot() {
     chmod 700 "$dir"
     case "$backend" in
         ufw)
-            if command -v ufw >/dev/null 2>&1; then
+            if _firewall_find_cmd ufw >/dev/null 2>&1; then
                 local status
                 status="$(sudo ufw status)" || return 1
                 [[ "$status" != *'Status: active'* ]] || active=1
+            fi
+            if _firewall_ufw_unit_available \
+                && sudo systemctl is-enabled --quiet ufw 2>/dev/null; then
+                enabled=1
             fi
             _firewall_save_path /etc/ufw "$dir/ufw" || return 1
             _firewall_save_path /etc/default/ufw "$dir/ufw-default" || return 1
@@ -236,8 +256,15 @@ firewall_restore() {
             if [[ "$active" -eq 1 ]]; then
                 sudo ufw --force enable || failed=1
                 sudo ufw reload || failed=1
-            elif command -v ufw >/dev/null 2>&1; then
+            elif _firewall_find_cmd ufw >/dev/null 2>&1; then
                 sudo ufw --force disable || failed=1
+            fi
+            if _firewall_ufw_unit_available; then
+                if [[ "$enabled" -eq 1 ]]; then
+                    sudo systemctl enable ufw >/dev/null || failed=1
+                else
+                    sudo systemctl disable ufw >/dev/null || failed=1
+                fi
             fi
             ;;
         firewalld)
@@ -447,11 +474,22 @@ firewall_remove_interface_port() {
 }
 
 firewall_enable() {
-    local backend="$1"
+    local backend="$1" ufw_unit=0
     case "$backend" in
         ufw)
             echo "  Activating UFW..."
+            _firewall_ufw_unit_available && ufw_unit=1
+            # Boot-time persistence is provided by the unit, not by ufw's own
+            # ENABLED flag: the package does not preset-enable it everywhere
+            # (Arch, minimal images), and systemctl start also brings the unit
+            # state in line with the rules that are already loaded.
+            if [[ "$ufw_unit" -eq 1 ]]; then
+                sudo systemctl enable ufw >/dev/null || return 1
+            fi
             sudo ufw --force enable >/dev/null || return 1
+            if [[ "$ufw_unit" -eq 1 ]]; then
+                sudo systemctl start ufw >/dev/null || return 1
+            fi
             ;;
         firewalld)
             echo "  Activating firewalld..."

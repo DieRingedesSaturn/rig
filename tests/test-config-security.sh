@@ -80,6 +80,34 @@ grep -q -- '--zone=rig-tailscale --change-interface=tailscale0' "$FIREWALL_LOG" 
 ! grep -q 'in_interface' "$FIREWALL_LOG" || fail "unsupported firewalld interface matcher remains"
 grep -q -- '--remove-port=22/tcp' "$FIREWALL_LOG" || fail "public SSH rule was not removed"
 
+# ufw --force enable only loads the ruleset; it does not manage ufw.service.
+# Rig must enable and start the unit or a reboot leaves the host unfiltered.
+UFW_ENABLE_LOG="$TEST_TMP/ufw-enable.log"
+(
+    source "$ROOT_DIR/lib/firewall.sh"
+    ufw() { printf 'ufw %s\n' "$*" >> "$UFW_ENABLE_LOG"; }
+    systemctl() { printf 'systemctl %s\n' "$*" >> "$UFW_ENABLE_LOG"; }
+    sudo() { "$@"; }
+    firewall_enable ufw >/dev/null
+) || fail "ufw activation failed"
+grep -qx 'systemctl enable ufw' "$UFW_ENABLE_LOG" || fail "ufw.service was not enabled at boot"
+grep -qx 'systemctl start ufw' "$UFW_ENABLE_LOG" || fail "ufw.service was not started"
+grep -qx 'ufw --force enable' "$UFW_ENABLE_LOG" || fail "ufw rules were not activated"
+
+# Rollback restores the unit's boot state alongside the ruleset.
+UFW_RESTORE_LOG="$TEST_TMP/ufw-restore.log"
+mkdir -p "$TEST_TMP/ufw-snapshot"
+printf 'ufw\n1\n0\n' > "$TEST_TMP/ufw-snapshot/state"
+(
+    source "$ROOT_DIR/lib/firewall.sh"
+    _firewall_restore_path() { return 0; }
+    ufw() { printf 'ufw %s\n' "$*" >> "$UFW_RESTORE_LOG"; }
+    systemctl() { printf 'systemctl %s\n' "$*" >> "$UFW_RESTORE_LOG"; }
+    sudo() { "$@"; }
+    firewall_restore ufw "$TEST_TMP/ufw-snapshot"
+) || fail "ufw rollback failed"
+grep -qx 'systemctl disable ufw' "$UFW_RESTORE_LOG" || fail "rollback did not restore the ufw unit boot state"
+
 FIREWALL_ALLOWED="$(
     source "$ROOT_DIR/lib/firewall.sh"
     firewall-cmd() { :; }
