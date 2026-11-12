@@ -120,4 +120,44 @@ rm -f "$RIG_ZRAM_SYSFS/disksize"
     || fail "macOS should have no zram package"
 ! ( export OS_FAMILY=macos; zram_supported ) || fail "macOS should be unsupported"
 
+# A stray marker cannot claim a nonadjacent user swap entry.
+printf '%s\n/data / ext4 defaults 0 1\n%s none swap sw 0 0\n' "$RIG_FSTAB_MARKER" "$RIG_SWAPFILE_PATH" > "$RIG_FSTAB_PATH"
+! swapfile_fstab_managed || fail "stray marker claimed unrelated swapfile"
+rig_fstab_without_managed_block > "$TEST_TMP/stripped"
+grep -qxF "$RIG_SWAPFILE_PATH none swap sw 0 0" "$TEST_TMP/stripped" || fail "user swap entry removed"
+printf '%s\n%s /data ext4 defaults 0 1\n' "$RIG_FSTAB_MARKER" "$RIG_SWAPFILE_PATH" > "$RIG_FSTAB_PATH"
+! swapfile_fstab_managed || fail "non-swap entry claimed as managed"
+
+# Noninteractive applies preserve both kinds of unmanaged config. Managed
+# files and absent files remain eligible for normal idempotent updates.
+printf 'custom config\n' > "$RIG_ZRAM_CONFIG_PATH"
+cp "$RIG_ZRAM_CONFIG_PATH" "$TEST_TMP/custom.original"
+( export RIG_NON_INTERACTIVE=1; ! zram_confirm_config_replacement "$RIG_ZRAM_CONFIG_PATH" ) || fail "--yes accepted unmanaged config"
+cmp -s "$RIG_ZRAM_CONFIG_PATH" "$TEST_TMP/custom.original" || fail "guard changed config"
+zram_confirm_config_replacement "$TEST_TMP/absent" || fail "absent config rejected"
+printf '%s\n' "$RIG_ZRAM_MARKER" > "$RIG_ZRAM_SYSCTL_PATH"
+zram_confirm_config_replacement "$RIG_ZRAM_SYSCTL_PATH" || fail "managed config rejected"
+
+# Exercise the real setup entry point, stopping before packages or sudo.
+if ! is_macos; then
+    mkdir -p "$TEST_TMP/bin"
+    printf '#!/bin/sh\nexit 0\n' > "$TEST_TMP/bin/systemctl"
+    printf '#!/bin/sh\necho unexpected mutation >> "$RIG_TEST_MUTATIONS"\nexit 1\n' > "$TEST_TMP/bin/sudo"
+    chmod +x "$TEST_TMP/bin/systemctl" "$TEST_TMP/bin/sudo"
+    export RIG_TEST_MUTATIONS="$TEST_TMP/mutations"
+    for destination in "$RIG_ZRAM_CONFIG_PATH" "$RIG_ZRAM_SYSCTL_PATH"; do
+        printf '%s\n' "$RIG_ZRAM_MARKER" > "$RIG_ZRAM_CONFIG_PATH"
+        printf '%s\n' "$RIG_ZRAM_MARKER" > "$RIG_ZRAM_SYSCTL_PATH"
+        printf 'custom config\n' > "$destination"
+        if PATH="$TEST_TMP/bin:$PATH" RIG_CONFIG_FILE="$TEST_TMP/rig-config" RIG_ZRAM_ENABLE=yes \
+            bash "$ROOT_DIR/setup-zram.sh" --yes > "$TEST_TMP/setup.log" 2>&1; then
+            fail "setup accepted unmanaged $destination"
+        fi
+        grep -q 'Preserved unmanaged' "$TEST_TMP/setup.log" || fail "setup failed before checking config"
+        cmp -s "$destination" "$TEST_TMP/custom.original" || fail "setup replaced unmanaged config"
+        [[ ! -f "$RIG_TEST_MUTATIONS" ]] || fail "setup mutated system before config decision"
+        [[ ! -f "$TEST_TMP/rig-config" ]] || fail "refused setup persisted policy"
+    done
+fi
+
 echo "zram regression tests passed"

@@ -306,9 +306,9 @@ firewall_is_active() {
             # the CLI through /usr/sbin as well: Debian's non-root PATH omits
             # it, and returning early here used to hide an active firewall.
             if cli="$(_firewall_find_cmd ufw)"; then
-                state="$(LC_ALL=C sudo -n "$cli" status 2>/dev/null || true)"
-                if grep -qi "Status: active" <<< "$state"; then
-                    return 0
+                if state="$(LC_ALL=C sudo -n "$cli" status 2>/dev/null)"; then
+                    if grep -qi '^Status: active' <<< "$state"; then return 0; fi
+                    if grep -qi '^Status: inactive' <<< "$state"; then return 1; fi
                 fi
             fi
             # Cached creds may be absent in read-only contexts (status.sh,

@@ -238,6 +238,17 @@ EOF
     ! firewall_is_active ufw
 ) || fail "inactive ufw was reported as active when it was outside PATH"
 
+# A successful inactive answer is authoritative even if the oneshot unit
+# remains active after `ufw disable`. Only query failures may use that fallback.
+(
+    source "$ROOT_DIR/lib/firewall.sh"
+    _firewall_find_cmd() { echo ufw; }
+    sudo() { echo 'Status: inactive'; }
+    systemctl() { echo 'unexpected fallback' > "$TEST_TMP/ufw-fallback"; return 0; }
+    ! firewall_is_active ufw
+    [[ ! -e "$TEST_TMP/ufw-fallback" ]]
+) || fail "explicit inactive UFW status was overridden by systemd"
+
 # The documented `bash install.sh` form must use the current checkout rather
 # than silently fetching the moving remote branch.
 MOCK_BIN="$TEST_TMP/mock-bin"

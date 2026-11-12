@@ -26,7 +26,7 @@ Changing the size or compression algorithm rebuilds `zram0`. The active swap uni
 | `/swapfile` | Optional swapfile, only when enabled |
 | `/etc/fstab` | Marked swap entry, only when the swapfile is enabled |
 
-Every write is preceded by a timestamped backup in `~/.local/share/rig/backups/system`. If an unmanaged `zram-generator.conf` or sysctl drop-in already exists, rig backs it up and warns before replacing it. An existing unmanaged `/swapfile` fstab entry is never modified.
+Existing files being replaced are backed up in `~/.local/share/rig/backups/system`. An unmanaged `zram-generator.conf` or sysctl drop-in requires explicit interactive approval. Keeping either file, including in noninteractive/`--yes` mode, stops this component before system changes. An existing unmanaged `/swapfile` fstab entry is never modified; ownership requires the swap entry to immediately follow Rig's marker.
 
 ## Environment variables
 

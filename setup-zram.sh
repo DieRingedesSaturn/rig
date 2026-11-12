@@ -94,6 +94,13 @@ if rig_can_prompt && [[ "${RIG_NON_INTERACTIVE:-0}" -ne 1 ]]; then
     printf "\n"
 fi
 
+# Refuse the whole apply before any mutations if either file is kept.
+# --yes skips prompts; it does not authorize replacing unmanaged files.
+if [[ "$ZRAM_ENABLE" == yes ]]; then
+    zram_confirm_config_replacement "$RIG_ZRAM_CONFIG_PATH" || exit 1
+    zram_confirm_config_replacement "$RIG_ZRAM_SYSCTL_PATH" || exit 1
+fi
+
 # install_root_file SRC DEST - atomically replace a root-owned config file.
 install_root_file() {
     local src="$1" dest="$2"
@@ -112,7 +119,7 @@ install_managed_file() {
         backup="$(rig_system_backup "$dest" zram)" || return 1
         echo "  Backup: $backup"
         if ! grep -qxF "$RIG_ZRAM_MARKER" "$dest" 2>/dev/null; then
-            printf "  ${YELLOW}⚠${NC} Replacing unmanaged %s (backup kept).\n" "$label"
+            printf "  ${YELLOW}⚠${NC} Replacing explicitly approved %s (backup kept).\n" "$label"
         fi
     fi
     install_root_file "$src" "$dest"

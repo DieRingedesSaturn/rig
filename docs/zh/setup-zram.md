@@ -26,7 +26,7 @@
 | `/swapfile` | 仅在启用 swapfile 时创建 |
 | `/etc/fstab` | 仅在启用 swapfile 时写入带标记的条目 |
 
-每次写入前都会在 `~/.local/share/rig/backups/system` 生成时间戳备份。如果已存在非 rig 托管的 `zram-generator.conf` 或 sysctl 文件，会先备份并告警再替换；已有的非托管 `/swapfile` fstab 条目绝不会被修改。
+替换既有文件前会在 `~/.local/share/rig/backups/system` 生成时间戳备份。非 rig 托管的 `zram-generator.conf` 或 sysctl 文件必须经交互明确同意才可覆盖；选择保留（包括非交互和 `--yes` 模式）会在修改系统前终止该组件。已有的非托管 `/swapfile` fstab 条目不会被修改，只有紧跟 Rig 标记的 swap 条目才会被认领。
 
 ## 环境变量
 

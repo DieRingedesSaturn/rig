@@ -162,8 +162,25 @@ swapfile_in_fstab() {
 # swapfile_fstab_managed - The path is in rig's marked fstab block.
 swapfile_fstab_managed() {
     [[ -f "$RIG_FSTAB_PATH" ]] || return 1
-    grep -qxF "$RIG_FSTAB_MARKER" "$RIG_FSTAB_PATH" 2>/dev/null \
-        && swapfile_in_fstab
+    awk -v marker="$RIG_FSTAB_MARKER" -v path="$RIG_SWAPFILE_PATH" '
+        pending && $1 == path && $2 == "none" && $3 == "swap" { found = 1 }
+        { pending = ($0 == marker) }
+        END { exit !found }
+    ' "$RIG_FSTAB_PATH"
+}
+
+# Check all config destinations before setup changes the system.
+zram_confirm_config_replacement() {
+    local path="$1" answer=""
+    [[ -e "$path" ]] || return 0
+    grep -qxF "$RIG_ZRAM_MARKER" "$path" 2>/dev/null && return 0
+    if [[ "${RIG_NON_INTERACTIVE:-0}" != 1 ]] && rig_can_prompt; then
+        printf 'Replace unmanaged %s (backup will be kept)? [y/N]: ' "$path" >&2
+        read -r answer </dev/tty || answer=""
+        case "$answer" in y|Y|yes|YES) return 0 ;; esac
+    fi
+    printf 'Preserved unmanaged %s; zram setup stopped before applying changes.\n' "$path" >&2
+    return 1
 }
 
 # rig_fstab_without_managed_block - Strip rig's two-line swap block, keeping
