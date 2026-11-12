@@ -108,6 +108,19 @@ printf 'ufw\n1\n0\n' > "$TEST_TMP/ufw-snapshot/state"
 ) || fail "ufw rollback failed"
 grep -qx 'systemctl disable ufw' "$UFW_RESTORE_LOG" || fail "rollback did not restore the ufw unit boot state"
 
+# Snapshot trees are user-owned; restoring them into /etc must not carry that
+# owner back (ufw/firewalld warn and non-root users could edit policy).
+FIREWALL_OWNER_LOG="$TEST_TMP/firewall-owner.log"
+mkdir -p "$TEST_TMP/firewall-owner-src"
+printf 'restored\n' > "$TEST_TMP/firewall-owner-src/user.rules"
+(
+    source "$ROOT_DIR/lib/firewall.sh"
+    sudo() { printf '%s\n' "$*" >> "$FIREWALL_OWNER_LOG"; }
+    _firewall_restore_path "$TEST_TMP/firewall-owner-src" /etc/ufw
+) || fail "firewall path restoration failed"
+grep -q -- 'cp -a --no-preserve=ownership .* /etc/ufw' "$FIREWALL_OWNER_LOG" \
+    || fail "restored firewall files kept the snapshot owner"
+
 # Socket-activated SSH (Ubuntu 24.10+/26.04) owns the port in ssh.socket.
 # The drop-in must preserve listen addresses and replace only the port.
 SOCKET_RENDER="$(TEST_TMP="$TEST_TMP" ROOT_DIR="$ROOT_DIR" bash -c '

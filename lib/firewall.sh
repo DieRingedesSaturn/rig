@@ -241,7 +241,13 @@ _firewall_restore_path() {
     case "$path" in /etc/ufw|/etc/default/ufw|/etc/firewalld) ;; *) return 1 ;; esac
     if [[ ! -e "$source" && ! -f "$source.absent" ]]; then return 1; fi
     sudo rm -rf "$path" || return 1
-    if [[ -e "$source" ]]; then sudo cp -a "$source" "$path" || return 1; fi
+    if [[ -e "$source" ]]; then
+        # Snapshots live in the invoking user's backup tree and are chowned to
+        # that user so they stay manageable. -a would carry that owner back
+        # into /etc, making ufw/firewalld warn and leaving firewall policy
+        # editable by a non-root account; keep the restoring euid (root).
+        sudo cp -a --no-preserve=ownership "$source" "$path" || return 1
+    fi
 }
 
 firewall_restore() {
