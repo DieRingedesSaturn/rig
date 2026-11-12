@@ -53,8 +53,15 @@ if cmd == 'sudo':
     os.execvp(args[0],args)
 if cmd == 'systemctl':
     target = 'firewalld' in args
+    socket = bool(os.environ.get('RIG_TEST_SSH_SOCKET')) and 'ssh.socket' in args
     action = args[0]
-    if action == 'show': print('Version=fixture'); sys.exit(0)
+    if action == 'show':
+        if socket:
+            prop = next((a.split('=',1)[1] for a in args if a.startswith('--property=')), '')
+            if prop == 'LoadState': print('loaded'); sys.exit(0)
+            if prop == 'Listen': print('0.0.0.0:22 (Stream)'); sys.exit(0)
+        print('Version=fixture'); sys.exit(0)
+    if socket: sys.exit(0)
     if target:
         if action == 'is-active': sys.exit(0 if active.read_text()=='1' else 3)
         if action == 'is-enabled': sys.exit(0 if enabled.read_text()=='1' else 1)
@@ -139,6 +146,7 @@ def fixture(base, name, backend="ufw", active=False):
     (work / "etc/ufw").mkdir(parents=True)
     (work / "etc/default").mkdir(parents=True)
     (work / "etc/firewalld").mkdir(parents=True)
+    (work / "etc/systemd/system").mkdir(parents=True)
     (work / "operations").touch()
     (work / "active").write_text("1" if active else "0")
     (work / "enabled").write_text("1" if active else "0")
@@ -181,6 +189,7 @@ security_test_sshd_config() {
 }
 ''')
     body = (ROOT / "setup-security.sh").read_text().replace('SSHD_CONFIG="/etc/ssh/sshd_config"', f'SSHD_CONFIG="{work}/sshd_config"')
+    body = body.replace("/etc/systemd/system", str(work / "etc/systemd/system"))
     (work / "setup-security.sh").write_text(body)
     controller = work / "bin/controller"
     controller.write_text(CONTROLLER)
@@ -226,6 +235,23 @@ with tempfile.TemporaryDirectory(prefix="rig-regressions-") as temp:
             data = json.loads((work / "runtime.json").read_text())
             check(data["default"] == "public" and "2222/tcp" in data["zones"]["public"]["ports"], "firewalld allow rule landed in wrong zone")
             check("firewall-offline-cmd --zone=public --add-port=2222/tcp" in operations, "stopped firewalld was not prepared offline")
+    # Socket-activated SSH (Ubuntu 24.10+/26.04) ignores sshd_config Port: the
+    # listening port lives in ssh.socket, so rig must update and restart it.
+    work, env = fixture(base, "ssh-socket", "ufw")
+    env["RIG_TEST_SSH_SOCKET"] = "1"
+    run(f'"{BASH}" "{work}/setup-security.sh" --yes', env)
+    dropin = work / "etc/systemd/system/ssh.socket.d/rig.conf"
+    check(dropin.exists(), "socket-activated SSH did not get a drop-in")
+    check("ListenStream=0.0.0.0:2222" in dropin.read_text(), "ssh.socket port was not updated")
+    check("systemctl restart ssh.socket" in (work / "operations").read_text(), "ssh.socket was not restarted")
+
+    work, env = fixture(base, "ssh-socket-rollback", "ufw")
+    env["RIG_TEST_SSH_SOCKET"] = "1"
+    env["RIG_FAIL_STEP"] = "listener"
+    proc = run(f'"{BASH}" "{work}/setup-security.sh" --yes', env, ok=False)
+    check(proc.returncode != 0, "socket listener failure reported success")
+    check(not (work / "etc/systemd/system/ssh.socket.d/rig.conf").exists(),
+          "rollback left the ssh.socket drop-in behind")
     # Repeated current-session ports must not leave an old Tailscale rule behind.
     for backend in ["ufw", "firewalld"]:
         work, env = fixture(base, backend + "-tailscale", backend)

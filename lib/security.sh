@@ -472,15 +472,78 @@ security_get_sshd_param() {
     printf '%s\n' "${value:-$default_val}"
 }
 
+# security_ssh_socket_unit - Print the active SSH socket unit, if any.
+# Ubuntu 24.10+ (including 26.04 LTS) activates SSH through ssh.socket: the
+# socket unit owns the listening port, sshd inherits it, and the Port directive
+# in sshd_config is ignored. Changing the port therefore requires editing the
+# socket unit, not just reloading ssh.service.
+security_ssh_socket_unit() {
+    local unit
+    command -v systemctl >/dev/null 2>&1 || return 1
+    systemctl show --property=Version >/dev/null 2>&1 || return 1
+    for unit in ssh.socket sshd.socket; do
+        [[ "$(systemctl show "$unit" --property=LoadState --value 2>/dev/null)" == "loaded" ]] || continue
+        if systemctl is-active --quiet "$unit" 2>/dev/null \
+            || systemctl is-enabled --quiet "$unit" 2>/dev/null; then
+            printf '%s\n' "$unit"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# security_ssh_socket_ports UNIT - Print every ListenStream port of the unit.
+security_ssh_socket_ports() {
+    local unit="$1"
+    systemctl show "$unit" --property=Listen --value 2>/dev/null \
+        | tr ' ' '\n' \
+        | sed -n 's/^.*:\([0-9][0-9]*\)$/\1/p' \
+        | sort -u
+}
+
+# security_render_ssh_socket_dropin UNIT PORT - Render a drop-in that preserves
+# the socket's current listen addresses but moves them to PORT.
+security_render_ssh_socket_dropin() {
+    local unit="$1" port="$2" listen addr rendered=0
+    printf '# Managed by rig: keep the SSH socket aligned with RIG_SSH_PORT\n'
+    printf '[Socket]\nListenStream=\n'
+    listen="$(systemctl show "$unit" --property=Listen --value 2>/dev/null || true)"
+    while IFS= read -r addr; do
+        [[ -n "$addr" ]] || continue
+        printf 'ListenStream=%s:%s\n' "$addr" "$port"
+        rendered=1
+    done < <(printf '%s\n' "$listen" | tr ' ' '\n' | sed -n 's/^Listen=//; s/^\(.*\):[0-9][0-9]*$/\1/p')
+    if [[ "$rendered" -eq 0 ]]; then
+        # No parseable address (older systemd): bind both families explicitly
+        # so a stock BindIPv6Only=ipv6-only setting cannot drop IPv4.
+        printf 'ListenStream=0.0.0.0:%s\n' "$port"
+        printf 'ListenStream=[::]:%s\n' "$port"
+        printf 'BindIPv6Only=ipv6-only\n'
+    fi
+}
+
 # Confirm the new port belongs to an SSH listener before withdrawing old rules.
 security_verify_sshd_listener() {
-    local port="$1" sockets
+    local port="$1" sockets unit
     if command -v ss >/dev/null 2>&1; then
         sockets="$(sudo ss -H -lntp)" || return 1
-        printf '%s\n' "$sockets" | awk -v port="$port" '
+        if printf '%s\n' "$sockets" | awk -v port="$port" '
             $4 ~ (":" port "$") && /users:.*"sshd"/ { found=1 }
             END { exit !found }
-        '
+        '; then
+            return 0
+        fi
+        # Socket activation: systemd owns the listening socket and hands it to
+        # sshd on demand. Accept it only when the SSH socket lists this port.
+        if unit="$(security_ssh_socket_unit 2>/dev/null)" \
+            && security_ssh_socket_ports "$unit" | grep -qx "$port" \
+            && printf '%s\n' "$sockets" | awk -v port="$port" '
+                $4 ~ (":" port "$") && /users:.*"systemd"/ { found=1 }
+                END { exit !found }
+            '; then
+            return 0
+        fi
+        return 1
     elif command -v lsof >/dev/null 2>&1; then
         sudo lsof -nP -iTCP:"$port" -sTCP:LISTEN | awk '
             $1 == "sshd" || $1 == "launchd" { found=1 }
@@ -528,6 +591,22 @@ security_reload_sshd() {
         sudo service "$svc" reload || sudo service "$svc" restart
     else
         sudo pkill -HUP -x sshd
+    fi
+}
+
+# security_restart_sshd - Full restart, required after rebinding an activated
+# socket: the running sshd keeps the socket it inherited at startup.
+security_restart_sshd() {
+    local svc=sshd
+    is_debian && svc=ssh
+    if command -v systemctl >/dev/null 2>&1 && systemctl show --property=Version >/dev/null 2>&1; then
+        sudo systemctl restart "$svc"
+    elif is_macos; then
+        sudo launchctl kickstart -k system/com.openssh.sshd
+    elif command -v service >/dev/null 2>&1; then
+        sudo service "$svc" restart
+    else
+        sudo pkill -TERM -x sshd
     fi
 }
 

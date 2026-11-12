@@ -20,7 +20,7 @@
 
 | 项目 | 说明 |
 |------|------|
-| SSH 端口 | `Port` 指令渲染进全局段（绝不落入 `Match` 块） |
+| SSH 端口 | `Port` 指令渲染进全局段（绝不落入 `Match` 块）；SSH 由 systemd socket 激活时（Ubuntu 24.10+/26.04）改写 `ssh.socket` drop-in 并重启 socket，因为此时 `Port` 会被忽略 |
 | Root 登录 | `PermitRootLogin`（`no` / `prohibit-password` / `yes`） |
 | 密码认证 | `PasswordAuthentication` + `KbdInteractiveAuthentication no` |
 | 公钥认证 | `PubkeyAuthentication` |

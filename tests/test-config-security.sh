@@ -108,6 +108,46 @@ printf 'ufw\n1\n0\n' > "$TEST_TMP/ufw-snapshot/state"
 ) || fail "ufw rollback failed"
 grep -qx 'systemctl disable ufw' "$UFW_RESTORE_LOG" || fail "rollback did not restore the ufw unit boot state"
 
+# Socket-activated SSH (Ubuntu 24.10+/26.04) owns the port in ssh.socket.
+# The drop-in must preserve listen addresses and replace only the port.
+SOCKET_RENDER="$(TEST_TMP="$TEST_TMP" ROOT_DIR="$ROOT_DIR" bash -c '
+    source "$ROOT_DIR/lib/security.sh"
+    systemctl() {
+        case "$*" in
+            "show --property=Version") return 0 ;;
+            "show ssh.socket --property=LoadState --value") echo loaded ;;
+            "show ssh.socket --property=Listen --value") printf "0.0.0.0:22 (Stream)\n[::]:22 (Stream)\n"; return 0 ;;
+            "is-active --quiet ssh.socket") return 0 ;;
+            "is-enabled --quiet ssh.socket") return 1 ;;
+        esac
+        return 1
+    }
+    security_ssh_socket_unit
+    security_render_ssh_socket_dropin ssh.socket 2222
+')" || fail "ssh socket detection/render failed"
+grep -qx 'ssh.socket' <<< "$SOCKET_RENDER" || fail "active ssh.socket was not detected"
+grep -qx 'ListenStream=0.0.0.0:2222' <<< "$SOCKET_RENDER" || fail "IPv4 listen address not preserved"
+grep -qx 'ListenStream=\[::\]:2222' <<< "$SOCKET_RENDER" || fail "IPv6 listen address not preserved"
+
+# A systemd-owned listener on the declared socket port is a valid SSH state,
+# even before sshd has been handed the socket for the first connection.
+(
+    source "$ROOT_DIR/lib/security.sh"
+    ss() { printf 'LISTEN 0 4096 0.0.0.0:2222 0.0.0.0:* users:(("systemd",pid=1,fd=25))\n'; }
+    sudo() { [[ "$1" == "-n" ]] && shift; "$@"; }
+    systemctl() {
+        case "$*" in
+            "show --property=Version") return 0 ;;
+            "show ssh.socket --property=LoadState --value") echo loaded ;;
+            "show ssh.socket --property=Listen --value") echo '0.0.0.0:2222 (Stream)'; return 0 ;;
+            "is-active --quiet ssh.socket") return 0 ;;
+            "is-enabled --quiet ssh.socket") return 1 ;;
+        esac
+        return 1
+    }
+    security_verify_sshd_listener 2222
+) || fail "socket-activated SSH listener was not accepted"
+
 FIREWALL_ALLOWED="$(
     source "$ROOT_DIR/lib/firewall.sh"
     firewall-cmd() { :; }

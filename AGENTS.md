@@ -82,7 +82,7 @@ flowchart TD
     S6 -- 否 --> S4
     S6 -- 是 --> S7[4. 保存防火墙快照\n先保护当前与目标 SSH 端口再设默认策略\n启用并启动 ufw.service（ufw 不管理 systemd unit）\n未运行的firewalld先离线准备规则]
     S7 --> S8[5. 备份并安装候选配置, 二次 sshd -t]
-    S8 --> S9[6. 重载 sshd 服务]
+    S8 --> S9[6. 重载/重启 sshd 服务\nsocket 激活时先更新 ssh.socket 并重启]
     S9 --> S10{重载成功?}
     S10 -- 否 --> S11[自动回滚 sshd_config 与防火墙快照\n恢复原服务状态 / 明确报告回滚失败]
     S10 -- 是 --> S14{新SSH监听确认?}

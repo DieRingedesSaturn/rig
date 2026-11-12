@@ -198,6 +198,26 @@ if [[ "$RIG_SSH_PORT" -lt 1 || "$RIG_SSH_PORT" -gt 65535 ]]; then
     exit 1
 fi
 
+# Socket-activated SSH (Ubuntu 24.10+/26.04) ignores sshd_config's Port: the
+# listening port belongs to ssh.socket. Detect it early so a port change edits
+# the socket before any firewall or SSH configuration is touched.
+SSH_SOCKET_UNIT="$(security_ssh_socket_unit 2>/dev/null || true)"
+SSH_SOCKET_DROPIN=""
+SSH_SOCKET_UPDATE=0
+SSH_SOCKET_CHANGED=0
+SSH_SOCKET_DROPIN_EXISTED=0
+BACKUP_SSH_SOCKET=""
+SSH_PORT_CHANGED=0
+if [[ " $CURRENT_SSH_PORTS " != *" $RIG_SSH_PORT "* ]]; then
+    SSH_PORT_CHANGED=1
+fi
+if [[ -n "$SSH_SOCKET_UNIT" ]]; then
+    SSH_SOCKET_DROPIN="/etc/systemd/system/${SSH_SOCKET_UNIT}.d/rig.conf"
+    if ! security_ssh_socket_ports "$SSH_SOCKET_UNIT" | grep -qx "$RIG_SSH_PORT"; then
+        SSH_SOCKET_UPDATE=1
+    fi
+fi
+
 case "$RIG_SSH_ACCESS" in public|tailscale) ;; *) echo "Invalid RIG_SSH_ACCESS: $RIG_SSH_ACCESS" >&2; exit 1 ;; esac
 case "$RIG_SSH_ROOT_LOGIN" in no|prohibit-password|yes) ;; *) echo "Invalid RIG_SSH_ROOT_LOGIN: $RIG_SSH_ROOT_LOGIN" >&2; exit 1 ;; esac
 case "$RIG_SSH_PASSWORD_AUTH" in yes|no) ;; *) echo "Invalid RIG_SSH_PASSWORD_AUTH: $RIG_SSH_PASSWORD_AUTH" >&2; exit 1 ;; esac
@@ -265,9 +285,22 @@ security_cleanup() {
         if [[ "$FW_CHANGED" -eq 1 ]]; then
             firewall_restore "$FW_BACKEND" "$FIREWALL_SNAPSHOT" || rollback_failed=1
         fi
+        if [[ "$SSH_SOCKET_CHANGED" -eq 1 ]]; then
+            if [[ "$SSH_SOCKET_DROPIN_EXISTED" -eq 1 && -n "$BACKUP_SSH_SOCKET" ]]; then
+                sudo cp "$BACKUP_SSH_SOCKET" "$SSH_SOCKET_DROPIN" || rollback_failed=1
+            else
+                sudo rm -f "$SSH_SOCKET_DROPIN" || rollback_failed=1
+            fi
+            sudo systemctl daemon-reload || rollback_failed=1
+            sudo systemctl restart "$SSH_SOCKET_UNIT" || rollback_failed=1
+        fi
         if [[ "$SSH_CHANGED" -eq 1 ]]; then
             if [[ "$SSH_WAS_RUNNING" -eq 1 ]]; then
-                security_test_sshd_config && security_reload_sshd || rollback_failed=1
+                if [[ "$SSH_SOCKET_CHANGED" -eq 1 || "$SSH_PORT_CHANGED" -eq 1 ]]; then
+                    security_test_sshd_config && security_restart_sshd || rollback_failed=1
+                else
+                    security_test_sshd_config && security_reload_sshd || rollback_failed=1
+                fi
             else
                 security_stop_sshd || rollback_failed=1
             fi
@@ -392,8 +425,32 @@ echo "  Backup: $BACKUP_CONFIG"
 SSH_CHANGED=1
 sudo cp "$SSHD_CANDIDATE" "$SSHD_CONFIG"
 security_test_sshd_config || { echo "ERROR: installed sshd configuration failed preflight" >&2; exit 1; }
-security_reload_sshd || { echo "ERROR: sshd reload failed" >&2; exit 1; }
-security_verify_sshd_listener "$RIG_SSH_PORT" || { echo "ERROR: new SSH listener not verified" >&2; exit 1; }
+
+if [[ "$SSH_SOCKET_UPDATE" -eq 1 ]]; then
+    echo "  Updating $SSH_SOCKET_UNIT to port $RIG_SSH_PORT..."
+    if sudo test -f "$SSH_SOCKET_DROPIN"; then
+        BACKUP_SSH_SOCKET="$(rig_system_backup "$SSH_SOCKET_DROPIN" security)"
+        SSH_SOCKET_DROPIN_EXISTED=1
+    fi
+    SSH_SOCKET_CHANGED=1
+    sudo mkdir -p "$(dirname "$SSH_SOCKET_DROPIN")" \
+        || { echo "ERROR: cannot create $(dirname "$SSH_SOCKET_DROPIN")" >&2; exit 1; }
+    security_render_ssh_socket_dropin "$SSH_SOCKET_UNIT" "$RIG_SSH_PORT" \
+        | sudo tee "$SSH_SOCKET_DROPIN" >/dev/null \
+        || { echo "ERROR: cannot write $SSH_SOCKET_DROPIN" >&2; exit 1; }
+    sudo systemctl daemon-reload \
+        || { echo "ERROR: systemd daemon-reload failed" >&2; exit 1; }
+    sudo systemctl restart "$SSH_SOCKET_UNIT" \
+        || { echo "ERROR: $SSH_SOCKET_UNIT restart failed" >&2; exit 1; }
+    security_restart_sshd || { echo "ERROR: sshd restart failed" >&2; exit 1; }
+elif [[ "$SSH_PORT_CHANGED" -eq 1 ]]; then
+    # A reload only re-reads configuration; a full restart guarantees the new
+    # listening port is bound on every OpenSSH version.
+    security_restart_sshd || { echo "ERROR: sshd restart failed" >&2; exit 1; }
+else
+    security_reload_sshd || { echo "ERROR: sshd reload failed" >&2; exit 1; }
+fi
+security_verify_sshd_listener "$RIG_SSH_PORT" || { echo "ERROR: new SSH listener not verified on port $RIG_SSH_PORT" >&2; exit 1; }
 echo "  ✔ New SSH listener verified on port $RIG_SSH_PORT."
 
 # Reconcile rules that were previously declared by Rig but the user removed in

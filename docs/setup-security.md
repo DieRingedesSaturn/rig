@@ -20,7 +20,7 @@ Current and target SSH ports are protected during the transition. Old rules are 
 
 | Item | Description |
 |------|-------------|
-| SSH port | `Port` directive rendered into the global section (never inside `Match` blocks) |
+| SSH port | `Port` directive rendered into the global section (never inside `Match` blocks); when SSH is systemd socket-activated (Ubuntu 24.10+/26.04) Rig rewrites an `ssh.socket` drop-in and restarts the socket, because `Port` is ignored there |
 | Root login | `PermitRootLogin` (`no` / `prohibit-password` / `yes`) |
 | Password auth | `PasswordAuthentication` + `KbdInteractiveAuthentication no` |
 | Public key auth | `PubkeyAuthentication` |
