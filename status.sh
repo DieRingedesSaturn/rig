@@ -28,6 +28,8 @@ source "$SCRIPT_DIR/lib/tools.sh"
 source "$SCRIPT_DIR/lib/firewall.sh"
 # shellcheck source=lib/security.sh
 source "$SCRIPT_DIR/lib/security.sh"
+# shellcheck source=lib/zram.sh
+source "$SCRIPT_DIR/lib/zram.sh"
 
 # A status report must never pop a sudo password prompt; degraded "unknown"
 # values are preferable to an interactive prompt from a read-only command.
@@ -550,6 +552,46 @@ detect_security() {
     echo "${status}|${version}|${config}"
 }
 
+detect_zram() {
+    local status="not_installed" version="N/A" config="not-configured"
+    local zram_active=0 swap_active=0 managed=0
+    local parts=()
+
+    if zram_is_active; then
+        local zram_mb=""
+        zram_active=1
+        zram_mb="$(zram_active_size_mb 2>/dev/null || true)"
+        if [[ -n "$zram_mb" ]]; then
+            parts+=("zram0 ${zram_mb}M")
+        else
+            parts+=("zram0")
+        fi
+    fi
+    if swapfile_is_active; then
+        swap_active=1
+        parts+=("swapfile")
+    fi
+    if zram_config_is_managed; then
+        managed=1
+    fi
+
+    if [[ $zram_active -eq 1 || $swap_active -eq 1 ]]; then
+        status="installed"
+        if [[ $managed -eq 1 ]] || swapfile_fstab_managed; then
+            config="configured"
+        else
+            config="external"
+        fi
+        version="$(IFS=' '; echo "${parts[*]}")"
+    elif [[ $managed -eq 1 ]] || zram_sysctl_is_managed; then
+        status="partial"
+        config="install-only"
+        version="inactive"
+    fi
+
+    printf '%s|%s|%s\n' "$status" "$version" "$config"
+}
+
 detect_neovim() {
     local status="not_installed" version="N/A" config="not-configured"
 
@@ -572,7 +614,7 @@ detect_neovim() {
 # --- Output Formatters -------------------------------------------------------
 
 # Component registry (parallel to install.sh)
-COMP_IDS=(shell tmux git tools neovim node uv containers tailscale ssh security)
+COMP_IDS=(shell tmux git tools neovim node uv containers tailscale ssh security zram)
 COMP_NAMES=(
     "Shell Environment"
     "Tmux"
@@ -585,6 +627,7 @@ COMP_NAMES=(
     "Tailscale"
     "SSH"
     "Security Baseline"
+    "Swap & zram"
 )
 COMP_DETECT=(
     detect_shell
@@ -598,6 +641,7 @@ COMP_DETECT=(
     detect_tailscale
     detect_ssh
     detect_security
+    detect_zram
 )
 
 # Run all detections and store results

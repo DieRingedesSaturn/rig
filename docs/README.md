@@ -19,6 +19,7 @@ All scripts automatically detect the operating system and use the appropriate pa
 | Tailscale | ✓ | ✓ | ✓ | ✓ | ✓ |
 | SSH (OpenSSH server & client) | ✓ | ✓ | ✓ | ✓ | ✓ (Remote Login) |
 | Security (Anti-Lockout & firewall) | ✓ | ✓ | ✓ | ✓ | — (Linux ufw/firewalld only) |
+| Swap & zram (systemd-zram-generator) | ✓ | ✓ | ✓ | ✓ | — (Linux only) |
 | Node.js (nvm) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | uv + Python | ✓ | ✓ | ✓ | ✓ | ✓ |
 
@@ -42,6 +43,7 @@ All scripts automatically detect the operating system and use the appropriate pa
 | [setup-tailscale.sh](setup-tailscale.md) | Tailscale VPN mesh network |
 | [setup-ssh.sh](setup-ssh.md) | OpenSSH server installation, custom port, and key import |
 | [setup-security.sh](../setup-security.sh) | Security hardening core (Anti-Lockout, firewall, port audit) |
+| [setup-zram.sh](setup-zram.md) | zram compressed swap + optional managed swapfile |
 
 ### Language Runtimes
 

@@ -63,6 +63,7 @@ _load_lib "rig-config.sh"
 _load_lib "containers.sh"
 _load_lib "backup.sh"
 _load_lib "neovim.sh"
+_load_lib "zram.sh"
 
 # Restore shell options: lib files set -euo pipefail but update.sh must NOT use errexit
 set +e
@@ -108,7 +109,7 @@ setup_colors() {
 
 # --- [C] Component Registry --------------------------------------------------
 
-COMP_IDS=(shell tmux git tools neovim node uv containers tailscale ssh security)
+COMP_IDS=(shell tmux git tools neovim node uv containers tailscale ssh security zram)
 
 COMP_NAMES=(
     "Shell Environment"
@@ -122,6 +123,7 @@ COMP_NAMES=(
     "Tailscale"
     "SSH"
     "Security Baseline"
+    "Swap & zram"
 )
 
 COMP_DESCS=(
@@ -136,20 +138,21 @@ COMP_DESCS=(
     "Tailscale VPN mesh network"
     "OpenSSH server + keys + GitHub SSH proxy (optional)"
     "Firewall rules and SSH hardening policies"
+    "zram compressed swap + optional swapfile"
 )
 
 # Whether component update needs sudo (dynamically set based on OS).
 # Linux package updates all need sudo; on macOS Homebrew manages shell, tmux,
 # git, tools and neovim without it, and ssh is a no-op there.
 if is_macos; then
-    COMP_NEEDS_SUDO=(0 0 0 0 0 0 0 1 1 0 1)
+    COMP_NEEDS_SUDO=(0 0 0 0 0 0 0 1 1 0 1 0)
 else
-    COMP_NEEDS_SUDO=(1 1 1 1 1 0 0 1 1 1 1)
+    COMP_NEEDS_SUDO=(1 1 1 1 1 0 0 1 1 1 1 1)
 fi
 
 # Detection / selection / version state
-COMP_INSTALLED=(0 0 0 0 0 0 0 0 0 0 0)
-COMP_SELECTED=(0 0 0 0 0 0 0 0 0 0 0)
+COMP_INSTALLED=(0 0 0 0 0 0 0 0 0 0 0 0)
+COMP_SELECTED=(0 0 0 0 0 0 0 0 0 0 0 0)
 VERSION_BEFORE=()
 VERSION_AFTER=()
 
@@ -240,7 +243,7 @@ Only installed components are shown; all are selected by default.
 Options:
   --all                  Update all installed components
   --components LIST      Comma-separated component list:
-                         shell,tmux,git,tools,neovim,node,uv,containers,tailscale,ssh,security
+                         shell,tmux,git,tools,neovim,node,uv,containers,tailscale,ssh,security,zram
   --gh-proxy URL         GitHub proxy URL (e.g., https://gh-proxy.org)
   -v, --verbose          Show raw command output (default: clean spinner)
   -h, --help             Show this help
@@ -287,6 +290,7 @@ detect_installed() {
         "command -v tailscale"
         "test -f /etc/ssh/sshd_config"
         "grep -q '# Rig Security Baseline' /etc/ssh/sshd_config 2>/dev/null || test -f '${RIG_SYSTEM_BACKUP_DIR}/etc__ssh__sshd_config.pre-rig' || ls /etc/ssh/sshd_config.rig.bak.* &>/dev/null"
+        "zram_config_is_managed || swapfile_fstab_managed"
     )
 
     for i in "${!checks[@]}"; do
@@ -335,6 +339,11 @@ get_version() {
             ;;
         security)
             ver="baseline active"
+            ;;
+        zram)
+            if zram_is_active; then
+                ver="zram0 $(zram_active_size_mb)M"
+            fi
             ;;
     esac
     echo "${ver:-unknown}"
@@ -490,7 +499,7 @@ _run_repo_script() {
     mkdir -p "$tmpdir/lib"
     for lib_file in os-detect.sh pkg-maps.sh pkg-manager.sh rig-config.sh \
                     containers.sh docker.sh podman.sh tools.sh firewall.sh \
-                    security.sh backup.sh tmux.sh neovim.sh; do
+                    security.sh backup.sh tmux.sh neovim.sh zram.sh; do
         url="${BASE_URL}/lib/${lib_file}"
         [[ -n "${GH_PROXY:-}" ]] && url="${GH_PROXY%/}/${url}"
         if ! curl -fsSL "$url" -o "$tmpdir/lib/$lib_file" 2>/dev/null; then
@@ -525,6 +534,12 @@ update_ssh() {
     pkg_update openssh-server || return 1
 }
 
+update_zram() {
+    # Idempotent re-apply: unchanged settings leave the device untouched, so
+    # this only upgrades the generator package and re-verifies the swap unit.
+    _run_repo_script setup-zram.sh --yes
+}
+
 run_update() {
     local idx=$1
     case "${COMP_IDS[$idx]}" in
@@ -539,6 +554,7 @@ run_update() {
         tailscale)   update_tailscale ;;
         ssh)         update_ssh ;;
         security)    update_security ;;
+        zram)        update_zram ;;
     esac
 }
 

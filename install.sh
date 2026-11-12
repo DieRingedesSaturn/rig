@@ -126,7 +126,7 @@ setup_colors() {
 
 # --- [C] Component Registry --------------------------------------------------
 
-COMP_IDS=(shell tmux git tools neovim node uv containers tailscale ssh security)
+COMP_IDS=(shell tmux git tools neovim node uv containers tailscale ssh security zram)
 
 COMP_NAMES=(
     "Shell Environment"
@@ -140,6 +140,7 @@ COMP_NAMES=(
     "Tailscale"
     "SSH"
     "Security Baseline"
+    "Swap & zram"
 )
 
 COMP_DESCS=(
@@ -154,6 +155,7 @@ COMP_DESCS=(
     "Tailscale VPN mesh network"
     "OpenSSH server + keys + GitHub SSH proxy (optional)"
     "Firewall, SSH hardening, port audit"
+    "zram compressed swap + optional swapfile"
 )
 
 COMP_SCRIPTS=(
@@ -168,34 +170,35 @@ COMP_SCRIPTS=(
     setup-tailscale.sh
     setup-ssh.sh
     setup-security.sh
+    setup-zram.sh
 )
 
 # Dependencies: space-separated indices that must run first (empty = none)
-COMP_DEPS=("" "" "" "" "" "" "" "" "" "" "9")
+COMP_DEPS=("" "" "" "" "" "" "" "" "" "" "9" "")
 
 # Whether component needs API keys (2 = token-only, 1 = url+key)
-COMP_NEEDS_KEYS=(0 0 0 0 0 0 0 0 2 0 0)
+COMP_NEEDS_KEYS=(0 0 0 0 0 0 0 0 2 0 0 0)
 
 # Whether component needs sudo (dynamically set based on OS)
 _init_sudo_needs() {
     # macOS with Homebrew doesn't need sudo for most components
     if is_macos; then
-        COMP_NEEDS_SUDO=(0 0 0 0 0 0 0 1 1 1 1)
+        COMP_NEEDS_SUDO=(0 0 0 0 0 0 0 1 1 1 1 0)
         # shell, tmux, git, tools, neovim, node, uv: no sudo (brew installs to user dir)
         # containers, tailscale, ssh, security: still need sudo (system-level services)
     else
         # Linux: package installs all need sudo (git included — setup-git.sh
         # runs pkg_install); node (nvm) and uv install into ~ and do not.
-        COMP_NEEDS_SUDO=(1 1 1 1 1 0 0 1 1 1 1)
+        COMP_NEEDS_SUDO=(1 1 1 1 1 0 0 1 1 1 1 1)
     fi
 }
 _init_sudo_needs
 
 # Selection state
-COMP_SELECTED=(0 0 0 0 0 0 0 0 0 0 0)
+COMP_SELECTED=(0 0 0 0 0 0 0 0 0 0 0 0)
 
 # Install-only mode: tool installed but API not configured (keys missing)
-COMP_INSTALL_ONLY=(0 0 0 0 0 0 0 0 0 0 0)
+COMP_INSTALL_ONLY=(0 0 0 0 0 0 0 0 0 0 0 0)
 
 # --- Preset Definitions (parallel arrays, bash 3.2 compatible) ---------------
 
@@ -322,7 +325,7 @@ Options:
                          vps        VPS server baseline with security & firewall
                          fullstack  Complete development environment
   --components LIST      Comma-separated component list:
-                         shell,tmux,git,tools,neovim,node,uv,containers,tailscale,ssh,security
+                         shell,tmux,git,tools,neovim,node,uv,containers,tailscale,ssh,security,zram
   --dry-run              Print the resolved plan without changing the system
   --gh-proxy URL         Download mirror prefix for rig scripts themselves
                          (e.g., https://gh-proxy.org), when GitHub raw is unreachable
@@ -395,7 +398,7 @@ download_all_needed() {
     mkdir -p "${TMPDIR_INSTALL}/lib"
     for lib_file in os-detect.sh pkg-maps.sh pkg-manager.sh rig-config.sh \
                     containers.sh podman.sh docker.sh tools.sh firewall.sh security.sh backup.sh \
-                    tmux.sh neovim.sh; do
+                    tmux.sh neovim.sh zram.sh; do
         download_script "lib/${lib_file}" 2>/dev/null || true
     done
 
@@ -956,7 +959,7 @@ run_component() {
         # Components that may ask questions must run in the foreground — under
         # `curl | bash` stdin is a pipe, so -t 0 cannot detect interactivity.
         case "${COMP_IDS[$idx]}" in
-            shell|git|neovim|tmux|containers|security|node|uv) needs_visible_tty=1 ;;
+            shell|git|neovim|tmux|containers|security|node|uv|zram) needs_visible_tty=1 ;;
             # tools prompts via /dev/tty only when fastfetch is unpackaged
             # (Debian ≤12, Ubuntu <25.04); behind the spinner the prompt is
             # invisible and the read deadlocks the install.

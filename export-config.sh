@@ -301,6 +301,7 @@ extract_config() {
     local rig_profile firewall public_tcp public_udp ssh_port
     local ssh_root_login ssh_password_auth ssh_pubkey_auth ssh_access admin_user
     local fw_default_in fw_default_out check_listening_ports warn_undeclared_ports
+    local zram_enable zram_size zram_compression swapfile_enable swapfile_size
 
     rig_profile="${RIG_PROFILE:-}"
     firewall="${RIG_FIREWALL:-auto}"
@@ -317,6 +318,11 @@ extract_config() {
     check_listening_ports="${RIG_CHECK_LISTENING_PORTS:-yes}"
     warn_undeclared_ports="${RIG_WARN_UNDECLARED_PORTS:-yes}"
     fail2ban="${RIG_FAIL2BAN:-no}"
+    zram_enable="${RIG_ZRAM_ENABLE:-yes}"
+    zram_size="${RIG_ZRAM_SIZE:-auto}"
+    zram_compression="${RIG_ZRAM_COMPRESSION:-zstd}"
+    swapfile_enable="${RIG_SWAPFILE_ENABLE:-no}"
+    swapfile_size="${RIG_SWAPFILE_SIZE:-1024}"
 
     if command -v rig_config_get >/dev/null 2>&1; then
         rig_profile="$(rig_config_get RIG_PROFILE "$rig_profile")"
@@ -334,6 +340,11 @@ extract_config() {
         check_listening_ports="$(rig_config_get RIG_CHECK_LISTENING_PORTS "$check_listening_ports")"
         warn_undeclared_ports="$(rig_config_get RIG_WARN_UNDECLARED_PORTS "$warn_undeclared_ports")"
         fail2ban="$(rig_config_get RIG_FAIL2BAN "$fail2ban")"
+        zram_enable="$(rig_config_get RIG_ZRAM_ENABLE "$zram_enable")"
+        zram_size="$(rig_config_get RIG_ZRAM_SIZE "$zram_size")"
+        zram_compression="$(rig_config_get RIG_ZRAM_COMPRESSION "$zram_compression")"
+        swapfile_enable="$(rig_config_get RIG_SWAPFILE_ENABLE "$swapfile_enable")"
+        swapfile_size="$(rig_config_get RIG_SWAPFILE_SIZE "$swapfile_size")"
     fi
 
     json+=$'    "system": {\n'
@@ -368,6 +379,16 @@ extract_config() {
     json+="$(json_kv "warn_undeclared_ports" "$warn_undeclared_ports")"
     json+=$',\n'
     json+="$(json_kv "fail2ban" "$fail2ban")"
+    json+=$',\n'
+    json+="$(json_kv "zram_enable" "$zram_enable")"
+    json+=$',\n'
+    json+="$(json_kv "zram_size" "$zram_size")"
+    json+=$',\n'
+    json+="$(json_kv "zram_compression" "$zram_compression")"
+    json+=$',\n'
+    json+="$(json_kv "swapfile_enable" "$swapfile_enable")"
+    json+=$',\n'
+    json+="$(json_kv "swapfile_size" "$swapfile_size")"
     json+=$'\n    }\n'
 
     json+=$'  }\n'

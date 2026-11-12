@@ -469,6 +469,7 @@ jobs:
         run: |
           for script in rig *.sh lib/*.sh tests/*.sh; do /bin/bash -n "$script" || exit 1; done
           /bin/bash tests/test-config-security.sh
+          /bin/bash tests/test-zram.sh
           /bin/bash tests/test-audit-regressions.sh
           /bin/bash tests/test-baselines.sh
 
@@ -789,6 +790,7 @@ jobs:
       - name: "Test: config import and security rendering regressions"
         run: |
           bash tests/test-config-security.sh
+          bash tests/test-zram.sh
           bash tests/test-audit-regressions.sh
           bash tests/test-baselines.sh
 

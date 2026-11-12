@@ -15,7 +15,8 @@ Automated baseline manager and lightweight VPS state manager for Linux and macOS
    - **Terminal & Base Tools**: Installs `zsh`, `starship`, `tmux`, `git`, `neovim` (>= 0.9), and zsh-autosuggestions / zsh-syntax-highlighting directly via native package managers (apt, dnf, pacman, brew);
    - **Essential CLI Toolchain**: Installs `ripgrep` (`rg`), `jq`, `fd`, `bat`, `gh` (GitHub CLI), `tree`, `shellcheck`, `curl`, `wget`, `unzip`, and build essentials (gcc/make);
    - **Runtimes & Containers**: Installs `nvm` with Node.js LTS (v24) and the Python `uv` package manager; provisions and configures `docker-ce` (with rootless support) or `podman`;
-   - **Networking & Services**: Installs the `tailscale` mesh VPN client, `openssh-server`, and the distro-native firewall manager (`ufw` on Debian/Ubuntu, `firewalld` on Fedora/RHEL).
+   - **Networking & Services**: Installs the `tailscale` mesh VPN client, `openssh-server`, and the distro-native firewall manager (`ufw` on Debian/Ubuntu, `firewalld` on Fedora/RHEL);
+   - **Memory & Swap**: Optional zram compressed swap through `systemd-zram-generator` (Debian/Ubuntu/Fedora/RHEL/Arch), sized at RAM/3 capped to 1 GiB with zstd, plus swappiness tuning and an optional managed swapfile. Existing disk swap is never touched unless you ask for one.
 
 3. **Configure & Harden System Files**
    - **`/etc/ssh/sshd_config`**: Applies `PermitRootLogin no`, `PasswordAuthentication no`, `PubkeyAuthentication yes`, and custom ports, guarded by preflight syntax validation (`sshd -t`);
@@ -87,7 +88,7 @@ Verbose mode (show raw script output instead of spinner):
 curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh | bash -s -- --all --verbose
 ```
 
-Available components: `shell`, `tmux`, `git`, `tools`, `neovim`, `node`, `uv`, `containers`, `tailscale`, `ssh`, `security`
+Available components: `shell`, `tmux`, `git`, `tools`, `neovim`, `node`, `uv`, `containers`, `tailscale`, `ssh`, `security`, `zram`
 
 **New:** Use presets for common setups:
 ```bash
@@ -454,6 +455,7 @@ Or install components individually in this order:
 9. `setup-tailscale.sh` — Tailscale VPN mesh network
 10. `setup-ssh.sh` — OpenSSH server installation & client setup
 11. `setup-security.sh` — Security hardening (Anti-Lockout, firewall, port audit)
+12. `setup-zram.sh` — zram compressed swap + optional managed swapfile
 
 ## Detailed Documentation
 

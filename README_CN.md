@@ -15,7 +15,8 @@ Linux 和 macOS 自动化配置与轻量级 VPS 主机状态管理器 (Personal 
    - **终端与基础环境**：通过系统原生包管理器（apt/dnf/pacman/brew）安装 `zsh`、`starship`、`tmux`、`git`、`neovim` (>= 0.9) 以及 zsh-autosuggestions、zsh-syntax-highlighting 插件；
    - **日常 CLI 工具链**：安装 `ripgrep` (`rg`)、`jq`、`fd`、`bat`、`gh` (GitHub CLI)、`tree`、`shellcheck`、`curl`、`wget`、`unzip` 和构建工具（gcc/make/build-essential）；
    - **开发运行态与容器**：安装 `nvm` 并拉取 Node.js LTS (v24)、安装 Python `uv` 包管理器；安装并配置 `docker-ce`（支持 rootless 用户态模式）或 `podman`；
-   - **组网与服务**：安装 `tailscale` 异地组网客户端、`openssh-server`，以及对应发行版的防火墙管理工具（Debian/Ubuntu 安装 `ufw`，Fedora/RHEL 安装 `firewalld`）。
+   - **组网与服务**：安装 `tailscale` 异地组网客户端、`openssh-server`，以及对应发行版的防火墙管理工具（Debian/Ubuntu 安装 `ufw`，Fedora/RHEL 安装 `firewalld`）；
+   - **内存与交换**：可选的 zram 压缩 swap，通过 `systemd-zram-generator`（Debian/Ubuntu/Fedora/RHEL/Arch）配置为内存 1/3、上限 1 GiB、zstd 压缩，并调优 swappiness；可选额外的托管 swapfile。默认不动已有磁盘 swap。
 
 3. **写入与调整配置文件 (Config & Hardening)**
    - **`/etc/ssh/sshd_config`**：在通过 `sshd -t` 语法预检的前提下，写入 `PermitRootLogin no`、`PasswordAuthentication no`、`PubkeyAuthentication yes`；
@@ -87,7 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/instal
 curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/install.sh | bash -s -- --all --verbose
 ```
 
-可用组件：`shell`、`tmux`、`git`、`tools`、`neovim`、`node`、`uv`、`containers`、`tailscale`、`ssh`、`security`
+可用组件：`shell`、`tmux`、`git`、`tools`、`neovim`、`node`、`uv`、`containers`、`tailscale`、`ssh`、`security`、`zram`
 
 **新功能：** 使用预设快速安装常用配置：
 ```bash
@@ -454,6 +455,7 @@ curl -fsSL https://raw.githubusercontent.com/DieRingedesSaturn/rig/master/instal
 9. `setup-tailscale.sh` — Tailscale VPN 组网
 10. `setup-ssh.sh` — OpenSSH 服务安装与客户端配置
 11. `setup-security.sh` — 安全加固核心模块（防 Lockout、防火墙、端口审计）
+12. `setup-zram.sh` — zram 压缩 swap + 可选托管 swapfile
 
 ## 详细文档
 

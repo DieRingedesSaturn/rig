@@ -19,6 +19,7 @@
 | Tailscale | ✓ | ✓ | ✓ | ✓ | ✓ |
 | SSH（OpenSSH 服务与客户端） | ✓ | ✓ | ✓ | ✓ | ✓ (Remote Login) |
 | Security（防失联与防火墙基线） | ✓ | ✓ | ✓ | ✓ | —（仅 Linux 支持 ufw/firewalld） |
+| Swap & zram（systemd-zram-generator） | ✓ | ✓ | ✓ | ✓ | —（仅 Linux） |
 | Node.js (nvm) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | uv + Python | ✓ | ✓ | ✓ | ✓ | ✓ |
 
@@ -42,6 +43,7 @@
 | [setup-tailscale.sh](setup-tailscale.md) | Tailscale VPN 组网 |
 | [setup-ssh.sh](setup-ssh.md) | OpenSSH 服务安装、端口与公私钥导入 |
 | [setup-security.sh](../../setup-security.sh) | 安全加固核心（防 Lockout、防火墙、端口双层审计） |
+| [setup-zram.sh](setup-zram.md) | zram 压缩 swap + 可选托管 swapfile |
 
 ### 语言环境
 

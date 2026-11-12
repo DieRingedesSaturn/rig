@@ -183,7 +183,7 @@ fi
 # Define supported component IDs (must match install.sh)
 SUPPORTED_COMPONENTS=(
     "shell" "tmux" "git" "tools"
-    "neovim" "node" "uv" "containers" "tailscale" "ssh" "security"
+    "neovim" "node" "uv" "containers" "tailscale" "ssh" "security" "zram"
 )
 
 # Validate each component ID
@@ -239,6 +239,11 @@ RIG_ADMIN_USER=$(jq -r '.config.system.admin_user // empty' "$CONFIG_FILE" 2>/de
 RIG_CHECK_LISTENING_PORTS=$(jq -r '.config.system.check_listening_ports // empty' "$CONFIG_FILE" 2>/dev/null || true)
 RIG_WARN_UNDECLARED_PORTS=$(jq -r '.config.system.warn_undeclared_ports // empty' "$CONFIG_FILE" 2>/dev/null || true)
 RIG_FAIL2BAN=$(jq -r '.config.system.fail2ban // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_ZRAM_ENABLE=$(jq -r '.config.system.zram_enable // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_ZRAM_SIZE=$(jq -r '.config.system.zram_size // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_ZRAM_COMPRESSION=$(jq -r '.config.system.zram_compression // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_SWAPFILE_ENABLE=$(jq -r '.config.system.swapfile_enable // empty' "$CONFIG_FILE" 2>/dev/null || true)
+RIG_SWAPFILE_SIZE=$(jq -r '.config.system.swapfile_size // empty' "$CONFIG_FILE" 2>/dev/null || true)
 
 # --- Load Secrets ------------------------------------------------------------
 
@@ -354,6 +359,11 @@ if [[ -f "$SCRIPT_DIR/lib/rig-config.sh" ]]; then
     [[ -n "$RIG_CHECK_LISTENING_PORTS" ]] && rig_config_set RIG_CHECK_LISTENING_PORTS "$RIG_CHECK_LISTENING_PORTS"
     [[ -n "$RIG_WARN_UNDECLARED_PORTS" ]] && rig_config_set RIG_WARN_UNDECLARED_PORTS "$RIG_WARN_UNDECLARED_PORTS"
     [[ -n "$RIG_FAIL2BAN" ]] && rig_config_set RIG_FAIL2BAN "$RIG_FAIL2BAN"
+    [[ -n "$RIG_ZRAM_ENABLE" ]] && rig_config_set RIG_ZRAM_ENABLE "$RIG_ZRAM_ENABLE"
+    [[ -n "$RIG_ZRAM_SIZE" ]] && rig_config_set RIG_ZRAM_SIZE "$RIG_ZRAM_SIZE"
+    [[ -n "$RIG_ZRAM_COMPRESSION" ]] && rig_config_set RIG_ZRAM_COMPRESSION "$RIG_ZRAM_COMPRESSION"
+    [[ -n "$RIG_SWAPFILE_ENABLE" ]] && rig_config_set RIG_SWAPFILE_ENABLE "$RIG_SWAPFILE_ENABLE"
+    [[ -n "$RIG_SWAPFILE_SIZE" ]] && rig_config_set RIG_SWAPFILE_SIZE "$RIG_SWAPFILE_SIZE"
 fi
 
 # --- Apply Git Config --------------------------------------------------------

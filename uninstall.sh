@@ -17,6 +17,8 @@ source "$SCRIPT_DIR/lib/containers.sh"
 source "$SCRIPT_DIR/lib/backup.sh"
 # shellcheck source=lib/neovim.sh
 source "$SCRIPT_DIR/lib/neovim.sh"
+# shellcheck source=lib/zram.sh
+source "$SCRIPT_DIR/lib/zram.sh"
 
 # =============================================================================
 # Rig Component Uninstaller
@@ -72,12 +74,13 @@ setup_colors() {
 
 # --- [C] Component Registry --------------------------------------------------
 
-COMP_IDS=(shell tmux git tools neovim node uv containers tailscale ssh security)
+COMP_IDS=(shell tmux git tools neovim node uv containers tailscale ssh security zram)
 
 COMP_NAMES=(
     "Shell Environment" "Tmux" "Git" "CLI Tools" "Neovim"
     "Node.js (nvm)" "uv + Python" "Containers" "Tailscale"
     "SSH" "Security Baseline"
+    "Swap & zram"
 )
 
 COMP_DESCS=(
@@ -92,23 +95,24 @@ COMP_DESCS=(
     "Tailscale VPN"
     "SSH keys + sshd config"
     "Restore sshd configuration and firewall notices"
+    "zram compressed swap + optional swapfile"
 )
 
 # Reverse dependency map: which components depend on THIS one
-COMP_DEPENDENTS=("" "" "" "" "" "" "" "" "" "10" "")
+COMP_DEPENDENTS=("" "" "" "" "" "" "" "" "" "10" "" "")
 
 # Whether uninstall needs sudo (indexes: shell=0 tmux=1 git=2 tools=3 neovim=4
 # node=5 uv=6 containers=7 tailscale=8 ssh=9 security=10)
 # On macOS, brew operations do not require sudo
 if is_macos; then
-    COMP_NEEDS_SUDO=(1 0 0 0 0 0 0 0 0 1 1)
+    COMP_NEEDS_SUDO=(1 0 0 0 0 0 0 0 0 1 1 0)
 else
-    COMP_NEEDS_SUDO=(1 1 0 1 0 0 0 1 1 1 1)
+    COMP_NEEDS_SUDO=(1 1 0 1 0 0 0 1 1 1 1 1)
 fi
 
 # State arrays
-COMP_INSTALLED=(0 0 0 0 0 0 0 0 0 0 0)
-COMP_SELECTED=(0 0 0 0 0 0 0 0 0 0 0)
+COMP_INSTALLED=(0 0 0 0 0 0 0 0 0 0 0 0)
+COMP_SELECTED=(0 0 0 0 0 0 0 0 0 0 0 0)
 VISIBLE=()
 
 # --- [D] Utility Functions ---------------------------------------------------
@@ -263,6 +267,10 @@ check_uv_installed() { command -v uv &>/dev/null; }
 check_containers_installed() { command -v podman &>/dev/null || command -v docker &>/dev/null; }
 check_tailscale_installed() { command -v tailscale &>/dev/null; }
 check_ssh_installed() { [[ -f /etc/ssh/sshd_config ]]; }
+check_zram_installed() {
+    zram_config_is_managed || swapfile_fstab_managed
+}
+
 check_security_installed() {
     grep -q "# Rig Security Baseline" /etc/ssh/sshd_config 2>/dev/null || \
     [[ -f "$RIG_SYSTEM_BACKUP_DIR/etc__ssh__sshd_config.pre-rig" ]] || \
@@ -283,6 +291,7 @@ detect_installed() {
         check_tailscale_installed
         check_ssh_installed
         check_security_installed
+        check_zram_installed
     )
     for i in "${!checks[@]}"; do
         if "${checks[$i]}"; then
@@ -823,6 +832,51 @@ uninstall_security() {
     echo "  Security baseline rollback complete."
 }
 
+uninstall_zram() {
+    if ! zram_supported; then
+        echo "  zram is not managed on this platform; nothing to remove."
+        return 0
+    fi
+
+    if zram_config_is_managed; then
+        sudo systemctl stop "$RIG_ZRAM_SWAP_UNIT" 2>/dev/null || true
+        sudo swapoff "$RIG_ZRAM_DEVICE" 2>/dev/null || true
+        sudo systemctl stop "$RIG_ZRAM_UNIT" 2>/dev/null || true
+        if command -v zramctl >/dev/null 2>&1; then
+            sudo zramctl --reset "$RIG_ZRAM_DEVICE" 2>/dev/null || true
+        fi
+        sudo rm -f "$RIG_ZRAM_CONFIG_PATH"
+        sudo systemctl daemon-reload 2>/dev/null || true
+        echo "  Removed rig zram configuration."
+    elif [[ -e "$RIG_ZRAM_CONFIG_PATH" ]]; then
+        echo "  Existing unmanaged $RIG_ZRAM_CONFIG_PATH left untouched."
+    fi
+
+    if zram_sysctl_is_managed; then
+        sudo rm -f "$RIG_ZRAM_SYSCTL_PATH"
+        sudo sysctl --system >/dev/null 2>&1 || true
+        echo "  Removed rig zram sysctl tuning."
+    fi
+
+    if swapfile_fstab_managed; then
+        if swapfile_is_active; then
+            sudo swapoff "$RIG_SWAPFILE_PATH" || { echo "ERROR: could not deactivate $RIG_SWAPFILE_PATH" >&2; return 1; }
+        fi
+        local tmp backup
+        tmp="$(mktemp)"
+        rig_fstab_without_managed_block > "$tmp"
+        backup="$(rig_system_backup "$RIG_FSTAB_PATH" zram 2>/dev/null || true)"
+        [[ -n "$backup" ]] && echo "  Backup: $backup"
+        sudo install -m 0644 "$tmp" "$RIG_FSTAB_PATH.rig-tmp"
+        sudo mv -f "$RIG_FSTAB_PATH.rig-tmp" "$RIG_FSTAB_PATH"
+        rm -f "$tmp"
+        sudo rm -f "$RIG_SWAPFILE_PATH"
+        echo "  Removed rig-managed swapfile $RIG_SWAPFILE_PATH."
+    fi
+
+    echo "  Note: the zram-generator package is kept; remove it with the package manager if desired."
+}
+
 # --- [H] Dispatcher & Dependency Checker ------------------------------------
 
 run_uninstall() {
@@ -839,6 +893,7 @@ run_uninstall() {
         tailscale)       uninstall_tailscale ;;
         ssh)             uninstall_ssh ;;
         security)        uninstall_security ;;
+        zram)            uninstall_zram ;;
     esac
 }
 

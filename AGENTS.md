@@ -29,6 +29,7 @@ rig/
 ├── setup-tailscale.sh       # Tailscale 组网客户端
 ├── setup-ssh.sh             # OpenSSH 服务安装与客户端配置
 ├── setup-security.sh        # 安全加固核心模块（防 Lockout、防火墙、端口审计）
+├── setup-zram.sh            # zram 压缩 swap + 可选 swapfile（跨发行版 generator）
 ├── lib/                     # 共享逻辑库与抽象层
 │   ├── os-detect.sh         # 操作系统与发行版探测
 │   ├── pkg-manager.sh       # 跨包管理器安装抽象 (apt/dnf/pacman/brew)
@@ -42,10 +43,12 @@ rig/
 │   ├── security.sh          # 账号安全、sshd 语法校验与端口审计逻辑
 │   ├── backup.sh            # 集中式配置备份管理库 (~/.local/share/rig/backups)
 │   ├── tmux.sh              # tmux 基线生成（按已装 tmux 版本分层）与存量配置告警
-│   └── neovim.sh            # init.lua 基线生成（桌面/无头档案）与官方二进制兜底安装
+│   ├── neovim.sh            # init.lua 基线生成（桌面/无头档案）与官方二进制兜底安装
+│   └── zram.sh              # zram-generator 配置渲染、fstab 块与 /proc/swaps 探测
 ├── tests/                   # 自动化回归测试集
 │   ├── test-config-security.sh # 配置与安全策略自动化测试
 │   ├── test-audit-regressions.sh # 审计回归测试 (Python driver)
+│   ├── test-zram.sh         # zram/swap 配置渲染与 fstab 块回归测试
 │   └── test-baselines.sh    # tmux/Neovim 基线生成与兼容性测试
 └── docs/                    # 详细设计与使用文档
     ├── zh/                  # 中文文档
@@ -63,7 +66,8 @@ flowchart TD
     A[启动 rig apply / install.sh] --> B[加载 lib/os-detect.sh 与配置 Profile]
     B --> C[应用基础环境: shell, tmux, git, tools, neovim]
     C --> D[配置开发运行态: node, uv, containers]
-    D --> E[配置网络: tailscale, ssh 基础服务]
+    D --> D2[配置内存: zram 压缩交换 + 可选 swapfile]
+    D2 --> E[配置网络: tailscale, ssh 基础服务]
     E --> F[执行 Security 安全策略加固]
     F --> G[执行端口与安全基线审计]
     G --> H[输出系统就绪报表]
@@ -183,6 +187,13 @@ RIG_WARN_UNDECLARED_PORTS="yes"
 
 # fail2ban sshd 暴力破解防护（no=不安装；yes=安装并启用 jail）
 RIG_FAIL2BAN="no"
+
+# zram 压缩交换与可选 swapfile
+RIG_ZRAM_ENABLE="yes"
+RIG_ZRAM_SIZE="auto"          # auto = 内存/3，上限 1024 MiB；也可写 MiB 数值
+RIG_ZRAM_COMPRESSION="zstd"   # zstd / lz4 / lzo / lzo-rle / deflate / 842
+RIG_SWAPFILE_ENABLE="no"      # yes 时创建并托管 /swapfile
+RIG_SWAPFILE_SIZE="1024"      # MiB
 ```
 
 ### 3.3 Security 诊断与状态输出范例
@@ -227,6 +238,7 @@ shellcheck --severity=error setup-*.sh install.sh update.sh status.sh export-con
 # 回归测试集
 bash tests/test-baselines.sh        # tmux/Neovim 基线生成、版本分层与存量配置告警
 bash tests/test-config-security.sh  # 配置读写与安全策略
+bash tests/test-zram.sh             # zram 配置渲染、fstab 块与 /proc/swaps 探测
 bash tests/test-audit-regressions.sh # 审计回归 (Python driver, 需 python3)
 ```
 
