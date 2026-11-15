@@ -325,12 +325,14 @@ security_render_sshd_config "$SSHD_CONFIG" "$SSHD_CANDIDATE" \
     "$RIG_SSH_PORT" "$RIG_SSH_ROOT_LOGIN" "$RIG_SSH_PASSWORD_AUTH" "$RIG_SSH_PUBKEY_AUTH"
 security_test_sshd_config "$SSHD_CANDIDATE" || { echo "ERROR: candidate failed syntax preflight" >&2; exit 1; }
 if [[ "$LOCKOUT_RISK" -eq 1 ]]; then
+    ADMIN_AUTH_MODE=key
+    [[ "$RIG_SSH_PASSWORD_AUTH" != yes ]] || ADMIN_AUTH_MODE=password-or-key
     ADMIN_CONTEXT="$(security_sshd_context "$RIG_ADMIN_USER" "$RIG_SSH_PORT")"
-    if ! security_verify_admin_user "$RIG_ADMIN_USER" "$SSHD_CANDIDATE" "$ADMIN_CONTEXT"; then
-        echo "FATAL: candidate configuration does not provide a verified admin key-login path; no firewall changes made" >&2
+    if ! security_verify_admin_user "$RIG_ADMIN_USER" "$SSHD_CANDIDATE" "$ADMIN_CONTEXT" "$ADMIN_AUTH_MODE"; then
+        echo "FATAL: no verified admin login path (key, or an enabled password with a valid account); no firewall changes made" >&2
         exit 1
     fi
-    echo "  ✔ Candidate admin key authentication verified. Keep this session open until a NEW login succeeds."
+    echo "  ✔ Candidate admin authentication checks passed. Keep this session open until a NEW login succeeds."
 fi
 
 # --- [2/6] Firewall Provisioning ---------------------------------------------

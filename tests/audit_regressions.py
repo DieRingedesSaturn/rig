@@ -179,6 +179,11 @@ rig_config_set() {
         f.write(r'''
 security_verify_admin_user() {
     [[ -f "$2" && "$3" == user=admin,* ]] || return 1
+    if [[ "${RIG_SSH_PASSWORD_AUTH:-no}" == yes ]]; then
+        [[ "${4:-}" == password-or-key ]] || return 1
+    else
+        [[ "${4:-}" == key ]] || return 1
+    fi
     [[ "${RIG_FAIL_STEP:-}" != guard ]]
 }
 security_test_sshd_config() {
@@ -252,6 +257,11 @@ with tempfile.TemporaryDirectory(prefix="rig-regressions-") as temp:
     check(proc.returncode != 0, "socket listener failure reported success")
     check(not (work / "etc/systemd/system/ssh.socket.d/rig.conf").exists(),
           "rollback left the ssh.socket drop-in behind")
+    # Retaining password login selects password-or-key in the real apply entry.
+    work, env = fixture(base, "password-mode")
+    env["RIG_SSH_PASSWORD_AUTH"] = "yes"
+    run(f'"{BASH}" "{work}/setup-security.sh" --yes', env)
+    check('RIG_SSH_PASSWORD_AUTH="yes"' in (work / "home/config").read_text(), "password policy was not retained")
     # Repeated current-session ports must not leave an old Tailscale rule behind.
     for backend in ["ufw", "firewalld"]:
         work, env = fixture(base, backend + "-tailscale", backend)

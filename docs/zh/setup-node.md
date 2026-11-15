@@ -60,3 +60,5 @@ nvm 适用于所有支持的平台（Linux 和 macOS）。无需操作系统特�
 ## 安装后
 
 运行 `source ~/.zshrc` 或打开新终端即可使用 `node`、`npm` 和 `nvm`。
+
+首次安装会先创建并导出 `NVM_DIR`，上游安装器不直接修改 shell 配置。继承自其他 `/home` 或 `/root` 账号的 `NVM_DIR` 会改用当前 `$HOME/.nvm`；其他自定义路径仍被保留。切换账号后建议重新 SSH 登录，避免继承旧环境。

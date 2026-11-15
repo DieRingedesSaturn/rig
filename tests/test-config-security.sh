@@ -89,6 +89,69 @@ grep -q '^# user comment$' "$CONFIG_FILE" || fail "config writer removed unrelat
     [[ "$(tail -1 "$TEST_TMP/rootless-install")" == install ]] || exit 1
 ) || fail "rootless Docker conflict handling"
 
+# Password-enabled candidates can keep a local admin login without a key,
+# but never bypass sudo, Allow/Deny, Match authentication or account expiry.
+(
+    source "$ROOT_DIR/lib/security.sh"
+    scenario=valid
+    rig_can_prompt() { return 1; }
+    id() { [[ "${1:-}" != -Gn ]] || echo 'admin sudo'; }
+    sudo() { [[ "$scenario" != sudo-denied ]]; }
+    getent() {
+        if [[ "$1" == shadow ]]; then
+            case "$scenario" in
+                locked) echo 'admin:!locked:20000:0:99999:7:::' ;;
+                empty) echo 'admin::20000:0:99999:7:::' ;;
+                expired) echo 'admin:$6$fixture:20000:0:99999:7::1:' ;;
+                password-expired) echo 'admin:$6$fixture:20000:0:1:7:::' ;;
+                must-change) echo 'admin:$6$fixture:0:0:99999:7:::' ;;
+                unreadable) return 2 ;;
+                *) echo 'admin:$6$fixture:20000:0:99999:7:::' ;;
+            esac
+        else
+            echo "admin:x:1000:1000::$TEST_TMP:/bin/bash"
+        fi
+    }
+    sshd() {
+        echo 'pubkeyauthentication yes'
+        if [[ "$scenario" == match-denied ]]; then echo 'passwordauthentication no'; else echo 'passwordauthentication yes'; fi
+        if [[ "$scenario" == multifactor ]]; then echo 'authenticationmethods publickey,password'; else echo 'authenticationmethods any'; fi
+        echo 'authorizedkeysfile missing'
+        [[ "$scenario" != denied ]] || echo 'denyusers admin'
+        return 0
+    }
+    security_verify_admin_user admin '' '' password-or-key || exit 1
+    if security_verify_admin_user admin; then exit 1; fi
+    for scenario in locked empty expired password-expired must-change unreadable match-denied multifactor denied sudo-denied; do
+        if security_verify_admin_user admin '' '' password-or-key; then exit 1; fi
+    done
+) || fail "password admin path validation"
+
+# The nvm installer needs an existing exported NVM_DIR. Do not inherit another
+# account's home, and do not let upstream edit shell profiles automatically.
+mkdir -p "$TEST_TMP/node-bin"
+cat > "$TEST_TMP/node-bin/curl" <<'CURL'
+#!/usr/bin/env bash
+cat <<'INSTALL'
+[[ -d "$NVM_DIR" && "$PROFILE" == /dev/null ]] || exit 9
+printf '%s\n' 'nvm() { echo v24.0.0; }' > "$NVM_DIR/nvm.sh"
+INSTALL
+CURL
+chmod +x "$TEST_TMP/node-bin/curl"
+for node_case in inherited custom; do
+    node_home="$TEST_TMP/node-$node_case"
+    mkdir -p "$node_home"
+    node_path="$node_home/.nvm"
+    [[ "$node_case" != custom ]] || node_path="$TEST_TMP/custom-nvm"
+    node_env="$node_path"
+    [[ "$node_case" != inherited ]] || node_env=/home/rig-old-account/.nvm
+    HOME="$node_home" NVM_DIR="$node_env" PATH="$TEST_TMP/node-bin:$PATH" \
+        GH_PROXY='' NODE_VERSION='' NPM_REGISTRY='' \
+        bash "$ROOT_DIR/setup-node.sh" > "$TEST_TMP/node-$node_case.log" 2>&1 \
+        || fail "nvm $node_case installation"
+    [[ -s "$node_path/nvm.sh" ]] || fail "nvm installed into wrong home"
+done
+
 # Candidate sshd rendering places the managed global block first while keeping
 # conditional Match settings byte-for-byte.
 SSHD_INPUT="$TEST_TMP/sshd_config"

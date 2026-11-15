@@ -78,7 +78,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     S0[触发 Security 加固流程] --> S1[1. 校验 Admin 用户\n非root/存在/未锁定/sudo组+sudo -l可用]
-    S1 --> S2[2. 渲染并验证候选配置中的管理员登录\nsshd -T -f -C / AuthorizedKeysFile / 权限 / 全部AllowDeny值 / 认证组合]
+    S1 --> S2[2. 渲染并验证候选配置中的管理员登录\nsshd -T -f -C / AuthorizedKeysFile / 权限 / 全部AllowDeny值 / 认证组合\n保留密码时可验证有效本地密码替代公钥]
     S2 --> S3{校验全部通过?}
     S3 -- 否 --> S4[硬性拒绝禁用 Root / 密码登录\n输出告警并终止]
     S3 -- 是 --> S5[3. 渲染候选 sshd_config 并执行 sshd -t 预检]

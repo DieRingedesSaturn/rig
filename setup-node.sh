@@ -52,6 +52,15 @@ if [[ -n "$GH_PROXY" ]]; then
 fi
 
 NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+case "$NVM_DIR" in
+    /home/*|/root/*)
+        if [[ "$NVM_DIR" != "$HOME"/* ]]; then
+            echo "Ignoring NVM_DIR from another home ($NVM_DIR); using $HOME/.nvm." >&2
+            NVM_DIR="$HOME/.nvm"
+        fi
+        ;;
+esac
+export NVM_DIR
 ZSHRC="$HOME/.zshrc"
 
 echo "=== Node.js Setup (nvm) ==="
@@ -138,7 +147,8 @@ else
         pkg_install curl
     fi
     _GH="github.com"
-    curl -fsSL "https://${_GH}/nvm-sh/nvm/raw/HEAD/install.sh" | bash
+    mkdir -p "$NVM_DIR"
+    curl -fsSL "https://${_GH}/nvm-sh/nvm/raw/HEAD/install.sh" | PROFILE=/dev/null bash
     if [[ ! -f "$NVM_DIR/nvm.sh" ]]; then
         echo "Error: nvm did not install correctly." >&2
         exit 1

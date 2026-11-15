@@ -60,3 +60,5 @@ nvm works on all supported platforms (Linux and macOS). No OS-specific package m
 ## Post-Install
 
 Run `source ~/.zshrc` or open a new terminal to use `node`, `npm`, and `nvm`.
+
+Fresh installs create and export `NVM_DIR` before invoking upstream, with automatic shell-profile editing disabled. An inherited `NVM_DIR` under another `/home` or `/root` account is reset to `$HOME/.nvm`; other custom paths are preserved. After switching users, prefer a fresh SSH login to avoid inherited environment variables.

@@ -7,10 +7,10 @@
 限制 root 或密码登录时，以下管理员检查必须在修改防火墙或 SSH 配置之前通过。每次运行都检查 Tailscale 连通状态（选用该模式时），并禁止同时关闭密码与公钥认证：
 
 1. `RIG_ADMIN_USER` 必须是非 root 且已存在的账户，密码字段未锁定（`UsePAM` 关闭时），属于 `sudo`/`wheel`/`admin` 组，并通过 sudo 权限查询；以普通用户运行时也会验证。
-2. 用户必须在**实际生效的** `AuthorizedKeysFile` 中至少有一个公钥（通过 `sshd -T` 解析，支持 `%u`/`%h`/`%%` 占位符），且 `$HOME`、`~/.ssh` 与密钥文件本身权限安全。
+2. 关闭密码认证时，用户必须在**实际生效的** `AuthorizedKeysFile` 中至少有一个公钥（通过 `sshd -T` 解析，支持 `%u`/`%h`/`%%` 占位符），且 `$HOME`、`~/.ssh` 与密钥文件本身权限安全。
 3. `AllowUsers`/`DenyUsers`/`AllowGroups`/`DenyGroups` 不得把 admin 用户排除在外。
 4. 当 `RIG_SSH_ACCESS=tailscale` 时，Tailscale 必须已安装**且**已连接。
-5. 候选配置的 `PubkeyAuthentication`、`AuthenticationMethods` 和适用的 `Match` 上下文必须允许已验证的管理员公钥登录。禁止同时关闭密码与公钥认证。
+5. 候选配置及适用的 `Match`、`AuthenticationMethods` 必须允许所验证的登录方式。保留密码认证时，可使用已设置、未锁定且未过期的本地管理员密码代替公钥；无法读取账户状态时不会放行该路径。禁止同时关闭密码与公钥认证。
 
 候选配置先通过 `sshd -t`，再用 `sshd -T -f candidate -C ...` 解析管理员的有效配置，**之后**才会修改防火墙。连接上下文优先使用 `SSH_CONNECTION`，否则使用 localhost；从本地控制台应用时，可用 `RIG_SSH_TEST_CONTEXT` 指定预期远程连接参数。该检查验证配置，不验证私钥持有或网络登录成功，因此仍需保留当前会话，直到新会话登录成功。
 

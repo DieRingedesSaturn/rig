@@ -7,10 +7,10 @@ Security baseline: SSH hardening with anti-lockout protection, unified firewall 
 When restricting root or password login, the admin checks below must pass before firewall or SSH configuration changes. Tailscale connectivity and rejection of an all-authentication-disabled policy apply to every run:
 
 1. `RIG_ADMIN_USER` must be a non-root account that exists, has an unlocked password field (when `UsePAM` is off), belongs to `sudo`/`wheel`/`admin`, and passes a sudo privilege query, including when invoked by a normal user.
-2. The user must have at least one public key in the **effective** `AuthorizedKeysFile` (resolved via `sshd -T`, honoring `%u`/`%h`/`%%` tokens), with safe permissions on `$HOME`, `~/.ssh`, and the key file itself.
+2. When password authentication is disabled, the user must have at least one public key in the **effective** `AuthorizedKeysFile` (resolved via `sshd -T`, honoring `%u`/`%h`/`%%` tokens), with safe permissions on `$HOME`, `~/.ssh`, and the key file itself.
 3. `AllowUsers`/`DenyUsers`/`AllowGroups`/`DenyGroups` must not exclude the admin user.
 4. When `RIG_SSH_ACCESS=tailscale`, Tailscale must be installed **and** connected.
-5. The candidate must allow the verified admin key through `PubkeyAuthentication`, `AuthenticationMethods`, and the applicable `Match` context. Disabling both password and public-key authentication is rejected.
+5. The candidate, including `Match` and `AuthenticationMethods`, must permit the verified authentication path. When password authentication is retained, a set, unlocked and unexpired local admin password can replace the key requirement. Unreadable account state does not qualify. Disabling both password and public-key authentication is rejected.
 
 The candidate is syntax-checked with `sshd -t` and resolved for the admin with `sshd -T -f candidate -C ...` **before** firewall changes. The context uses `SSH_CONNECTION` when available, otherwise localhost; from a local console, set `RIG_SSH_TEST_CONTEXT` to the intended remote connection parameters. This validates configuration, not possession of the private key or successful network login: keep the current session until a new login succeeds.
 

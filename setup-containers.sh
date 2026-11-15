@@ -97,6 +97,7 @@ if [[ "$ENGINE" == "docker" && "$MODE" == "rootless" ]] && ! containers_have_use
     if rig_can_prompt; then
         echo ""
         echo "Docker rootless needs a working systemd user session, which is unavailable."
+        echo "If you switched users with su/sudo, open a fresh SSH login as $(id -un) and retry."
         if [[ "$have_podman" -eq 1 ]]; then
             echo "  [1] Keep installed Podman (recommended)"
             echo "  [2] Install/configure rootful Docker"
@@ -118,6 +119,7 @@ if [[ "$ENGINE" == "docker" && "$MODE" == "rootless" ]] && ! containers_have_use
         fi
     else
         echo "Error: Docker rootless requires a usable systemd user session." >&2
+        echo "       After su/sudo, log in directly over SSH as $(id -un) to establish the user session." >&2
         echo "       Fix it first, or explicitly set RIG_CONTAINER_MODE=rootful." >&2
         [[ "$have_podman" -eq 1 ]] && echo "       Podman is already installed; set RIG_CONTAINER_ENGINE=podman to keep it." >&2
         exit 1

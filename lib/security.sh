@@ -108,10 +108,11 @@ _security_verify_fail() {
 
 # security_verify_admin_user - Check if a non-root admin user is valid for login
 # Arguments: username
-# Returns: 0 if valid and has sudo + key, 1 otherwise
+# Fourth argument: key (default), or password-or-key when password auth was explicitly retained.
+# Returns: 0 if sudo and an eligible candidate authentication path are verified.
 security_verify_admin_user() {
     local user="$1"
-    local config_file="${2:-}" context="${3:-}"
+    local config_file="${2:-}" context="${3:-}" auth_mode="${4:-key}"
     local _SECURITY_SSHD_OUTPUT
 
     if [[ -z "$user" || "$user" == "root" ]]; then
@@ -174,6 +175,63 @@ security_verify_admin_user() {
         return 1
     fi
 
+    if [[ "$(security_get_sshd_param RefuseConnection no)" == yes ]]; then
+        _security_verify_fail "sshd refuses connections for this admin context"
+        return 1
+    fi
+
+    # 7. Allow/Deny user and group lists must not exclude the admin account.
+    # These come from sshd -T, so unset directives simply yield empty strings.
+    local allowusers denyusers allowgroups denygroups
+    allowusers="$(security_get_sshd_param AllowUsers "")"
+    denyusers="$(security_get_sshd_param DenyUsers "")"
+    allowgroups="$(security_get_sshd_param AllowGroups "")"
+    denygroups="$(security_get_sshd_param DenyGroups "")"
+    if [[ -n "$denyusers" ]] && _security_user_in_list "$user" "$denyusers" "$context" deny; then
+        _security_verify_fail "user '$user' matches DenyUsers ($denyusers)"
+        return 1
+    fi
+    if [[ -n "$allowusers" ]] && ! _security_user_in_list "$user" "$allowusers" "$context" allow; then
+        _security_verify_fail "user '$user' is not in AllowUsers ($allowusers)"
+        return 1
+    fi
+    if [[ -n "$denygroups" ]] && _security_group_in_list "$user_groups" "$denygroups"; then
+        _security_verify_fail "a group of '$user' matches DenyGroups ($denygroups)"
+        return 1
+    fi
+    if [[ -n "$allowgroups" ]] && ! _security_group_in_list "$user_groups" "$allowgroups"; then
+        _security_verify_fail "no group of '$user' is in AllowGroups ($allowgroups)"
+        return 1
+    fi
+
+    # 8. A locked account ('!' shadow prefix) only blocks pubkey login when
+    # sshd is not delegating account checks to PAM (UsePAM no).
+    if command -v getent >/dev/null 2>&1; then
+        local shadow_pw usepam
+        shadow_pw="$(getent shadow "$user" 2>/dev/null | cut -d: -f2 || true)"
+        if [[ "$shadow_pw" == '!'* ]]; then
+            usepam="$(security_get_sshd_param UsePAM "unknown")"
+            usepam="$(printf '%s' "$usepam" | tr '[:upper:]' '[:lower:]')"
+            if [[ "$usepam" != "yes" ]]; then
+                _security_verify_fail "account '$user' is locked (shadow '!') and UsePAM is not 'yes'"
+                return 1
+            fi
+        fi
+    fi
+
+    if [[ "$auth_mode" == password-or-key ]]; then
+        if _security_verify_admin_password "$user"; then
+            echo "  Candidate permits admin password login; account password is set and unexpired."
+            return 0
+        fi
+        echo "  Password login could not be verified (SSH rules, password/account state or unreadable account data); checking keys instead." >&2
+    fi
+    _security_verify_admin_key "$user"
+}
+
+# Reuse the parent's resolved candidate snapshot, including Match rules.
+_security_verify_admin_key() {
+    local user="$1"
     # 4. Resolve the authorized-keys file sshd actually reads. The default is
     # ~/.ssh/authorized_keys, but AuthorizedKeysFile may relocate it (%u, %h
     # and %% tokens expand the same way sshd expands them).
@@ -269,50 +327,28 @@ security_verify_admin_user() {
         _security_verify_fail "AuthenticationMethods '$methods' does not permit verified key-only login"
         return 1
     fi
-    if [[ "$(security_get_sshd_param RefuseConnection no)" == yes ]]; then
-        _security_verify_fail "sshd refuses connections for this admin context"
-        return 1
-    fi
+    return 0
+}
 
-    # 7. Allow/Deny user and group lists must not exclude the admin account.
-    # These come from sshd -T, so unset directives simply yield empty strings.
-    local allowusers denyusers allowgroups denygroups
-    allowusers="$(security_get_sshd_param AllowUsers "")"
-    denyusers="$(security_get_sshd_param DenyUsers "")"
-    allowgroups="$(security_get_sshd_param AllowGroups "")"
-    denygroups="$(security_get_sshd_param DenyGroups "")"
-    if [[ -n "$denyusers" ]] && _security_user_in_list "$user" "$denyusers" "$context" deny; then
-        _security_verify_fail "user '$user' matches DenyUsers ($denyusers)"
-        return 1
-    fi
-    if [[ -n "$allowusers" ]] && ! _security_user_in_list "$user" "$allowusers" "$context" allow; then
-        _security_verify_fail "user '$user' is not in AllowUsers ($allowusers)"
-        return 1
-    fi
-    if [[ -n "$denygroups" ]] && _security_group_in_list "$user_groups" "$denygroups"; then
-        _security_verify_fail "a group of '$user' matches DenyGroups ($denygroups)"
-        return 1
-    fi
-    if [[ -n "$allowgroups" ]] && ! _security_group_in_list "$user_groups" "$allowgroups"; then
-        _security_verify_fail "no group of '$user' is in AllowGroups ($allowgroups)"
-        return 1
-    fi
-
-    # 8. A locked account ('!' shadow prefix) only blocks pubkey login when
-    # sshd is not delegating account checks to PAM (UsePAM no).
-    if command -v getent >/dev/null 2>&1; then
-        local shadow_pw usepam
-        shadow_pw="$(getent shadow "$user" 2>/dev/null | cut -d: -f2 || true)"
-        if [[ "$shadow_pw" == '!'* ]]; then
-            usepam="$(security_get_sshd_param UsePAM "unknown")"
-            usepam="$(printf '%s' "$usepam" | tr '[:upper:]' '[:lower:]')"
-            if [[ "$usepam" != "yes" ]]; then
-                _security_verify_fail "account '$user' is locked (shadow '!') and UsePAM is not 'yes'"
-                return 1
-            fi
-        fi
-    fi
-
+# Never print password hashes. A password path is eligible only when the
+# caller explicitly retained password auth and all account data is verifiable.
+_security_verify_admin_password() {
+    local user="$1" methods method allowed=0 shadow name hash changed minimum maximum warn inactive expires rest today
+    [[ "$(security_get_sshd_param PasswordAuthentication no)" == yes ]] || return 1
+    methods="$(security_get_sshd_param AuthenticationMethods unknown)"
+    for method in $methods; do
+        [[ "$method" == any || "$method" == password ]] && allowed=1
+    done
+    [[ "$allowed" -eq 1 ]] || return 1
+    command -v getent >/dev/null 2>&1 || return 1
+    shadow="$(getent shadow "$user" 2>/dev/null || true)"
+    if [[ -z "$shadow" ]]; then shadow="$(sudo -n getent shadow "$user" 2>/dev/null)" || return 1; fi
+    IFS=: read -r name hash changed minimum maximum warn inactive expires rest <<< "$shadow"
+    [[ "$name" == "$user" && -n "$hash" && "$hash" != x && "$hash" != '!'* && "$hash" != '*'* ]] || return 1
+    [[ "$changed" =~ ^[0-9]+$ && "$changed" -gt 0 ]] || return 1
+    today=$(( $(date +%s) / 86400 ))
+    case "$expires" in ''|-1) ;; *) [[ "$expires" =~ ^[0-9]+$ && "$expires" -gt "$today" ]] || return 1 ;; esac
+    case "$maximum" in ''|-1) ;; *) [[ "$maximum" =~ ^[0-9]+$ ]] && (( changed + maximum > today )) || return 1 ;; esac
     return 0
 }
 
