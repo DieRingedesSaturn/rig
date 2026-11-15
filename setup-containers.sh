@@ -69,6 +69,28 @@ if [[ "$SOURCE" != "config" ]] && rig_can_prompt && \
     esac
 fi
 
+# Existing rootful containers must not be stopped as a side effect of selecting
+# the rootless default. Resolve that conflict before any installation changes.
+if [[ "$ENGINE" == docker && "$MODE" == rootless ]] && docker_rootful_running \
+    && [[ "${RIG_DOCKER_ROOTLESS_COEXIST:-no}" != yes ]]; then
+    if rig_can_prompt && [[ "${RIG_NON_INTERACTIVE:-0}" != 1 ]]; then
+        echo 'Rootful Docker is running. Its containers will be preserved.'
+        echo '  [1] Keep/configure rootful Docker (default)'
+        echo '  [2] Install rootless alongside rootful Docker (separate containers/storage)'
+        echo '  [3] Stop without changes'
+        read -rp 'Choice [1/2/3, default: 1]: ' mode_choice </dev/tty || mode_choice=3
+        case "$mode_choice" in
+            ''|1) MODE=rootful; SOURCE=interactive; SAVE_CHOICE=1 ;;
+            2) export RIG_DOCKER_ROOTLESS_COEXIST=yes ;;
+            *) echo 'Stopped before changing Docker.'; exit 1 ;;
+        esac
+    else
+        echo 'Error: rootful Docker is running; no container changes made.' >&2
+        echo 'Set RIG_CONTAINER_MODE=rootful to keep it, or RIG_DOCKER_ROOTLESS_COEXIST=yes to explicitly install both.' >&2
+        exit 1
+    fi
+fi
+
 # Docker rootless cannot work without a usable user systemd session. Make the
 # fallback a user decision; never silently switch security models.
 if [[ "$ENGINE" == "docker" && "$MODE" == "rootless" ]] && ! containers_have_user_systemd; then

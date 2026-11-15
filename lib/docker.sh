@@ -185,9 +185,34 @@ with open(path, "w") as f:
 
 # --- Rootless ----------------------------------------------------------------
 
+docker_rootful_running() {
+    systemctl is-active --quiet docker.service 2>/dev/null \
+        || systemctl is-active --quiet docker.socket 2>/dev/null \
+        || { [[ -S /var/run/docker.sock ]] && docker --host unix:///var/run/docker.sock info >/dev/null 2>&1; }
+}
+
+_docker_install_user_service() {
+    if docker_rootful_running; then
+        if [[ "${RIG_DOCKER_ROOTLESS_COEXIST:-no}" != yes ]]; then
+            echo 'Error: rootful Docker is running; it has been preserved.' >&2
+            echo 'Choose RIG_CONTAINER_MODE=rootful, or explicitly set RIG_DOCKER_ROOTLESS_COEXIST=yes to install both.' >&2
+            return 1
+        fi
+        dockerd-rootless-setuptool.sh install --force
+    else
+        dockerd-rootless-setuptool.sh install
+    fi
+}
+
 # setup_docker_rootless - Install Docker as a user-level service.
 setup_docker_rootless() {
     echo "[docker] Installing Docker in rootless mode..."
+    local engine_existed=0
+    command -v docker >/dev/null 2>&1 && engine_existed=1
+    if docker_rootful_running && [[ "${RIG_DOCKER_ROOTLESS_COEXIST:-no}" != yes ]]; then
+        echo 'Error: rootful Docker is running; choose rootful mode or explicitly allow coexistence.' >&2
+        return 1
+    fi
 
     if is_macos; then
         echo "  Docker on macOS runs through Docker Desktop, which has no rootless"
@@ -229,13 +254,12 @@ setup_docker_rootless() {
     _docker_install_engine
     _docker_install_rootless_extras
 
-    # 4. Stop the system daemon if a previous rootful install enabled it, so the
-    #    CLI does not silently talk to the wrong socket.
-    if systemctl is-enabled docker.service >/dev/null 2>&1 \
-        || systemctl is-active docker.service >/dev/null 2>&1; then
+    # Only stop a system daemon created by this fresh engine installation.
+    # Existing rootful workloads are preserved; coexistence needs explicit consent.
+    if [[ "$engine_existed" -eq 0 ]] && docker_rootful_running; then
         echo ""
         echo "[docker] Disabling the system-wide daemon (rootless replaces it)"
-        sudo systemctl disable --now docker.service docker.socket 2>/dev/null || true
+        sudo systemctl disable --now docker.service docker.socket || return 1
     fi
 
     # 5. Install the per-user service.
@@ -245,7 +269,7 @@ setup_docker_rootless() {
         && systemctl --user is-enabled docker.service >/dev/null 2>&1; then
         echo "  already installed, skipping dockerd-rootless-setuptool"
     else
-        dockerd-rootless-setuptool.sh install
+        _docker_install_user_service || return 1
     fi
 
     systemctl --user enable --now docker

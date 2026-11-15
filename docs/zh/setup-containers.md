@@ -21,6 +21,8 @@ Docker 和 Podman 提供的都是"跑容器"这同一件事。把它们当成两
 
 `RIG_CONTAINER_MODE` 选择 `rootless`（默认）或 `rootful`。
 
+已有 rootful Docker 运行时（包括 socket 激活），Rig 会保留它。交互安装可选择保留 rootful、明确允许 rootless 与其并存，或停止；非交互安装需指定 `RIG_CONTAINER_MODE=rootful` 或 `RIG_DOCKER_ROOTLESS_COEXIST=yes`。明确允许并存时，使用上游安装器的 `--force` 参数，保留系统 daemon；两套 daemon 的存储和容器相互独立。
+
 选择 Docker rootless 但 systemd user session 不可用时，脚本不会静默切换模式：交互运行会让用户选择保留已有 Podman、使用 rootful Docker，或停止并先修复 session；非交互运行则安全失败并给出操作提示。
 
 ### 配置文件
@@ -94,8 +96,8 @@ Rootless 和 rootful Docker 是两套真正不同的安装。它们的 socket、
 | 3 | 检查 subordinate UID/GID 范围 —— Docker 要求至少 65536 个 ID；仅在缺失时分配 |
 | 4 | 安装 Docker Engine 包 |
 | 5 | 安装 `docker-ce-rootless-extras`（提供 `dockerd-rootless-setuptool.sh`） |
-| 6 | 若之前启用过系统级 daemon，则将其停用 |
-| 7 | `dockerd-rootless-setuptool.sh install` |
+| 6 | 仅停用本次全新安装所创建的系统 daemon，保留已有 rootful 容器 |
+| 7 | `dockerd-rootless-setuptool.sh install`（仅明确同意并存时加 `--force`） |
 | 8 | `systemctl --user enable --now docker` |
 | 9 | `loginctl enable-linger`，让服务在登出和重启后仍然存活 —— **在无头 VPS 上至关重要** |
 | 10 | `docker context use rootless` |

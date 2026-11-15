@@ -367,7 +367,7 @@ if security_verify_admin_user admin "{candidate}" 'user=admin,addr=127.0.0.1,hos
     echo 'guard accepted real Match User denial' >&2; exit 1
 fi
 ''', plain_env)
-            check("pubkeyauthentication no" in probe.stdout, "real sshd did not resolve Match denial")
+            check("pubkeyauthentication no" in probe.stdout.lower(), "real sshd did not resolve Match denial")
         else:
             print("SKIP real sshd Match check: temporary config query unavailable")
 

@@ -21,6 +21,8 @@ Resolution order, highest priority first:
 
 `RIG_CONTAINER_MODE` selects `rootless` (default) or `rootful`.
 
+When rootful Docker is already running (including socket activation), Rig preserves it. Interactive setup offers to keep rootful Docker, explicitly install rootless alongside it, or stop. Noninteractive setup requires `RIG_CONTAINER_MODE=rootful` or `RIG_DOCKER_ROOTLESS_COEXIST=yes`. Explicit coexistence uses the upstream installer's `--force` option and keeps the system daemon running; the two daemons have separate storage and workloads.
+
 If Docker rootless is selected without a usable systemd user session, Rig never changes security mode silently: an interactive run offers to keep Podman, use rootful Docker, or stop and repair the session; a non-interactive run fails with guidance.
 
 ### Configuration file
@@ -94,8 +96,8 @@ Rootless and rootful Docker are genuinely different installations. They use diff
 | 3 | Check the subordinate UID/GID range — Docker requires at least 65536 IDs; allocate only if missing |
 | 4 | Install the Docker Engine packages |
 | 5 | Install `docker-ce-rootless-extras` for `dockerd-rootless-setuptool.sh` |
-| 6 | Disable the system-wide daemon if a previous rootful install enabled it |
-| 7 | `dockerd-rootless-setuptool.sh install` |
+| 6 | Stop only a daemon created by this fresh engine installation; preserve pre-existing rootful workloads |
+| 7 | `dockerd-rootless-setuptool.sh install` (with `--force` only for explicitly approved coexistence) |
 | 8 | `systemctl --user enable --now docker` |
 | 9 | `loginctl enable-linger` so the service survives logout and reboot — **essential on a headless VPS** |
 | 10 | `docker context use rootless` |

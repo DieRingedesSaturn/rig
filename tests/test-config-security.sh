@@ -37,6 +37,58 @@ EOF
 grep -q '^# user comment$' "$CONFIG_FILE" || fail "config writer removed unrelated content"
 [[ "$(grep -c '^RIG_COMPONENTS=' "$CONFIG_FILE")" -eq 1 ]] || fail "config writer left duplicate keys"
 
+# Rootful Docker conflicts must preserve existing workloads. Only explicit
+# coexistence passes --force to the upstream rootless installer.
+(
+    source "$ROOT_DIR/lib/os-detect.sh"
+    source "$ROOT_DIR/lib/pkg-maps.sh"
+    source "$ROOT_DIR/lib/pkg-manager.sh"
+    source "$ROOT_DIR/lib/rig-config.sh"
+    source "$ROOT_DIR/lib/containers.sh"
+    source "$ROOT_DIR/lib/docker.sh"
+    docker() { return 0; }
+    systemctl() { [[ "$*" == 'is-active --quiet docker.socket' ]]; }
+    docker_rootful_running || exit 1
+    systemctl() { return 1; }
+    docker_rootful_running() { return 0; }
+    dockerd-rootless-setuptool.sh() { printf '%s\n' "$*" >> "$TEST_TMP/rootless-install"; }
+    pkg_install() { echo 'unexpected packages' > "$TEST_TMP/docker-mutations"; return 1; }
+    sudo() { echo 'unexpected sudo' > "$TEST_TMP/docker-mutations"; return 1; }
+    export RIG_DOCKER_ROOTLESS_COEXIST=no
+    if _docker_install_user_service; then exit 1; fi
+    if setup_docker_rootless; then exit 1; fi
+    [[ ! -e "$TEST_TMP/rootless-install" && ! -e "$TEST_TMP/docker-mutations" ]] || exit 1
+    export RIG_DOCKER_ROOTLESS_COEXIST=yes
+    _docker_install_user_service || exit 1
+    [[ "$(cat "$TEST_TMP/rootless-install")" == 'install --force' ]] || exit 1
+    # Exercise the full rootless setup with an existing rootful daemon. Every
+    # external mutation is stubbed; preserving it must not depend on a unit's
+    # enabled state or accidentally stop it later in the setup.
+    is_macos() { return 1; }
+    is_debian() { return 1; }
+    is_rhel() { return 1; }
+    containers_have_user_systemd() { return 0; }
+    containers_report_subid() { :; }
+    containers_ensure_subid() { :; }
+    newuidmap() { :; }
+    _docker_install_engine() { :; }
+    _docker_install_rootless_extras() { :; }
+    _docker_write_daemon_json() { :; }
+    loginctl() { echo 'Linger=yes'; }
+    systemctl() {
+        printf '%s\n' "$*" >> "$TEST_TMP/docker-systemctl"
+        [[ "$*" != '--user is-enabled docker.service' ]]
+    }
+    setup_docker_rootless || exit 1
+    [[ ! -e "$TEST_TMP/docker-mutations" ]] || exit 1
+    ! grep -q 'disable\|stop' "$TEST_TMP/docker-systemctl" || exit 1
+    grep -qxF -- '--user enable --now docker' "$TEST_TMP/docker-systemctl" || exit 1
+    [[ "$(tail -1 "$TEST_TMP/rootless-install")" == 'install --force' ]] || exit 1
+    docker_rootful_running() { return 1; }
+    _docker_install_user_service || exit 1
+    [[ "$(tail -1 "$TEST_TMP/rootless-install")" == install ]] || exit 1
+) || fail "rootless Docker conflict handling"
+
 # Candidate sshd rendering places the managed global block first while keeping
 # conditional Match settings byte-for-byte.
 SSHD_INPUT="$TEST_TMP/sshd_config"
